@@ -2,31 +2,25 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Tiến Lên Multiplayer</title>
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <title>Tiến Lên Multiplayer - Fixed</title>
+    <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <style>
         body { background: #1b5e20; color: white; font-family: sans-serif; text-align: center; }
         .setup-box { background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px; margin: 20px auto; width: 300px; }
-        .card-area { display: flex; gap: 5px; justify-content: center; margin-top: 20px; flex-wrap: wrap; }
-        .card { 
-            width: 60px; height: 90px; background: white; color: black; 
-            border-radius: 5px; display: flex; align-items: center; 
-            justify-content: center; font-weight: bold; font-size: 1.2rem;
-        }
-        .red { color: red; }
         button { padding: 10px; cursor: pointer; background: #ffeb3b; border: none; font-weight: bold; border-radius: 5px; }
         #room-id-display { font-weight: bold; color: #ffeb3b; }
+        .error { color: #ff5252; font-size: 0.8rem; margin-top: 10px; }
     </style>
 </head>
 <body>
 
     <h1>Tiến Lên Multiplayer</h1>
 
-    <!-- 1. CONNECTION SETUP -->
     <div id="setup" class="setup-box">
         <div id="host-section">
-            <button onclick="startHost()">Create Room (Host)</button>
+            <button id="create-btn" onclick="startHost()">Create Room (Host)</button>
             <p>Room ID: <span id="room-id-display">...</span></p>
+            <div id="error-log" class="error"></div>
         </div>
         <hr>
         <div id="join-section">
@@ -35,105 +29,49 @@
         </div>
     </div>
 
-    <!-- 2. GAME AREA -->
-    <div id="game-area" style="display:none;">
-        <h3>Connected Players: <span id="player-count">1</span>/4</h3>
-        <div id="status">Waiting for host to deal...</div>
-        <div class="card-area" id="my-hand"></div>
-        <br>
-        <button id="deal-btn" style="display:none;" onclick="dealCards()">Deal to Everyone</button>
-    </div>
-
     <script>
         let peer;
-        let conn;
         let connections = [];
-        let myHand = [];
 
-        // --- HOST LOGIC ---
         function startHost() {
-            peer = new Peer(); 
+            const display = document.getElementById('room-id-display');
+            const errorLog = document.getElementById('error-log');
+            
+            display.innerText = "Connecting...";
+            errorLog.innerText = "";
+
+            // Initialize PeerJS
+            // debug: 3 provides detailed console logs to help you troubleshoot
+            peer = new Peer(null, { debug: 3 }); 
+
             peer.on('open', (id) => {
-                document.getElementById('room-id-display').innerText = id;
-                document.getElementById('deal-btn').style.display = 'inline-block';
-                showGame();
+                display.innerText = id;
+                document.getElementById('create-btn').disabled = true;
+                console.log("My peer ID is: " + id);
+            });
+
+            peer.on('error', (err) => {
+                console.error("PeerJS Error:", err);
+                errorLog.innerText = "Error: " + err.type;
+                display.innerText = "Failed";
             });
 
             peer.on('connection', (c) => {
                 connections.push(c);
-                updatePlayerCount();
-                c.on('data', (data) => console.log("Received:", data));
+                console.log("New connection established!");
             });
         }
 
-        // --- PLAYER LOGIC ---
         function joinRoom() {
             const hostId = document.getElementById('join-id').value;
-            peer = new Peer();
-            peer.on('open', (id) => {
-                conn = peer.connect(hostId);
-                conn.on('open', () => {
-                    showGame();
-                    document.getElementById('status').innerText = "Connected! Waiting for deal...";
-                });
-                conn.on('data', (data) => {
-                    if (data.type === 'DEAL') {
-                        renderHand(data.cards);
-                    }
-                });
-            });
-        }
-
-        function showGame() {
-            document.getElementById('setup').style.display = 'none';
-            document.getElementById('game-area').style.display = 'block';
-        }
-
-        function updatePlayerCount() {
-            document.getElementById('player-count').innerText = connections.length + 1;
-        }
-
-        // --- CARD LOGIC ---
-        function dealCards() {
-            const deck = generateDeck();
-            shuffle(deck);
+            if(!hostId) return alert("Please enter a Room ID");
             
-            // Deal to self (Host)
-            renderHand(deck.slice(0, 13));
-
-            // Deal to others (Players)
-            connections.forEach((c, index) => {
-                const start = (index + 1) * 13;
-                c.send({ type: 'DEAL', cards: deck.slice(start, start + 13) });
+            peer = new Peer();
+            peer.on('open', () => {
+                const conn = peer.connect(hostId);
+                conn.on('open', () => console.log("Connected to host!"));
             });
-            document.getElementById('status').innerText = "Cards Dealt!";
-        }
-
-        function generateDeck() {
-            const suits = ['♠', '♣', '♦', '♥'];
-            const labels = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
-            let d = [];
-            for(let l of labels) {
-                for(let s of suits) {
-                    d.push({label: l, suit: s, color: (s==='♦'||s==='♥') ? 'red' : 'black'});
-                }
-            }
-            return d;
-        }
-
-        function shuffle(array) {
-            array.sort(() => Math.random() - 0.5);
-        }
-
-        function renderHand(cards) {
-            const container = document.getElementById('my-hand');
-            container.innerHTML = '';
-            cards.forEach(c => {
-                const div = document.createElement('div');
-                div.className = `card ${c.color}`;
-                div.innerHTML = `${c.label}<br>${c.suit}`;
-                container.appendChild(div);
-            });
+            peer.on('error', (err) => alert("Connection failed: " + err.type));
         }
     </script>
 </body>
