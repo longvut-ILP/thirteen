@@ -12,15 +12,13 @@
         button:disabled { background: #888; cursor: not-allowed; }
         input { padding: 10px; margin-top: 5px; border-radius: 4px; border: none; width: 100%; box-sizing: border-box; font-size: 1rem; }
         
-        /* Card Styles */
         .card-area { display: flex; gap: 5px; justify-content: center; margin-top: 20px; flex-wrap: wrap; }
         .card { width: 50px; height: 75px; background: white; color: black; border-radius: 5px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 1rem; flex-direction: column; cursor: pointer; border: 2px solid transparent; transition: transform 0.2s; }
         .card.selected { border: 2px solid #ffeb3b; transform: translateY(-10px); }
         .red { color: red; }
         
-        #lobby-room-id { font-weight: bold; color: #ffeb3b; font-size: 2.5em; letter-spacing: 5px; }
-        #error-log { background: #000; color: #0f0; font-family: monospace; font-size: 0.8rem; margin-top: 15px; padding: 10px; border-radius: 5px; text-align: left; }
         #lobby-section, #game-section { display: none; }
+        #game-log { text-align: left; background: #000; color: #0f0; padding: 10px; font-family: monospace; height: 150px; overflow-y: scroll; margin-bottom: 10px; }
     </style>
 </head>
 <body>
@@ -32,21 +30,19 @@
             <h3>Host a Game</h3>
             <input type="text" id="host-name" placeholder="Your Name">
             <button id="create-btn" onclick="startHost()">Create Room</button>
-            <p>Status: <span id="room-id-display">Waiting...</span></p>
         </div>
-        <hr style="margin: 20px 0;">
+        <hr>
         <div id="join-section">
             <h3>Join a Friend</h3>
             <input type="text" id="join-name" placeholder="Your Name">
             <input type="text" id="join-id" placeholder="Enter 4-Digit PIN" maxlength="4">
             <button onclick="joinRoom()">Join Room</button>
         </div>
-        <div id="error-log">Diagnostics standing by...</div>
     </div>
 
     <div id="lobby-section" class="box">
         <h2>Waiting Lobby</h2>
-        <span id="lobby-room-id">...</span>
+        <h1 id="lobby-room-id">...</h1>
         <p>Players: <span id="player-count">1</span>/4</p>
         <ul id="player-list"></ul>
         <button id="start-game-btn" style="display: none;" onclick="startGame()">Start Game</button>
@@ -54,7 +50,7 @@
 
     <div id="game-section" class="box" style="max-width: 800px;">
         <h2>Game Board</h2>
-        <div id="game-log" style="font-family: monospace; height: 100px; overflow-y: auto; background: #000; padding: 5px; margin-bottom: 10px;">Game Started!</div>
+        <div id="game-log"></div>
         <div class="card-area" id="my-hand"></div>
         <button onclick="playSelectedCards()">Play Selected Cards</button>
     </div>
@@ -63,10 +59,12 @@
         let peer, hostConnection, myName;
         let clientConnections = [], players = [];
         let currentHand = [];
+        let isHost = false;
 
         // --- HOST LOGIC ---
         function startHost() {
             myName = document.getElementById('host-name').value || "Host";
+            isHost = true;
             function attemptHostConnection() {
                 const randomPIN = Math.floor(1000 + Math.random() * 9000).toString();
                 peer = new Peer(randomPIN);
@@ -81,15 +79,7 @@
                 peer.on('connection', (conn) => {
                     clientConnections.push(conn);
                     conn.on('data', (data) => {
-                        if (data.type === 'JOIN_LOBBY') {
-                            players.push(data.name);
-                            updateLobbyUI();
-                            broadcastToClients({ type: 'UPDATE_LOBBY', players: players });
-                        }
-                        if (data.type === 'PLAY_CARDS') {
-                            logGame(`${data.name} played: ${data.cards.map(c => c.label+c.suit).join(', ')}`);
-                            broadcastToClients({ type: 'PLAY_CARDS', name: data.name, cards: data.cards });
-                        }
+                        handleIncomingData(data, conn);
                     });
                 });
                 peer.on('error', (err) => { if(err.type === 'unavailable-id') attemptHostConnection(); });
@@ -110,35 +100,60 @@
                     hostConnection.send({ type: 'JOIN_LOBBY', name: myName });
                 });
                 hostConnection.on('data', (data) => {
-                    if (data.type === 'UPDATE_LOBBY') { players = data.players; updateLobbyUI(); }
-                    if (data.type === 'START_GAME') {
-                        document.getElementById('lobby-section').style.display = "none";
-                        document.getElementById('game-section').style.display = "block";
-                    }
-                    if (data.type === 'DEAL') { currentHand = data.cards; renderHand(currentHand); }
-                    if (data.type === 'PLAY_CARDS') logGame(`${data.name} played: ${data.cards.map(c => c.label+c.suit).join(', ')}`);
+                    handleIncomingData(data);
                 });
             });
         }
 
-        // --- GAME PLAY LOGIC ---
+        // --- SHARED DATA HANDLER ---
+        function handleIncomingData(data, conn = null) {
+            if (data.type === 'JOIN_LOBBY') {
+                players.push(data.name);
+                updateLobbyUI();
+                broadcastToClients({ type: 'UPDATE_LOBBY', players: players });
+            }
+            if (data.type === 'UPDATE_LOBBY') { players = data.players; updateLobbyUI(); }
+            if (data.type === 'START_GAME') {
+                document.getElementById('lobby-section').style.display = "none";
+                document.getElementById('game-section').style.display = "block";
+            }
+            if (data.type === 'DEAL') { currentHand = data.cards; renderHand(currentHand); }
+            
+            // Critical: Handle Play Cards
+            if (data.type === 'PLAY_CARDS') {
+                logGame(`${data.name} played: ${data.cards.map(c => c.label+c.suit).join(', ')}`);
+                if (isHost) {
+                    // Host broadcasts to everyone (including sender to confirm receipt)
+                    broadcastToClients({ type: 'PLAY_CARDS', name: data.name, cards: data.cards });
+                }
+            }
+        }
+
         function playSelectedCards() {
             const selected = currentHand.filter((_, i) => document.querySelectorAll('.card')[i].classList.contains('selected'));
             if (selected.length === 0) return alert("Select at least one card!");
             
-            // Remove from hand and re-render
+            // Remove from hand
             currentHand = currentHand.filter(card => !selected.includes(card));
             renderHand(currentHand);
 
-            // Send move to host
             const msg = { type: 'PLAY_CARDS', name: myName, cards: selected };
-            if (hostConnection) hostConnection.send(msg); // If I am client
-            else { // If I am host
+            
+            if (isHost) {
+                // If I am host, process locally then broadcast
                 logGame(`You played: ${selected.map(c => c.label+c.suit).join(', ')}`);
                 broadcastToClients(msg);
+            } else {
+                // If I am client, send to host
+                if (hostConnection && hostConnection.open) {
+                    hostConnection.send(msg);
+                } else {
+                    alert("Connection lost!");
+                }
             }
         }
 
+        // --- UTILITIES ---
         function startGame() {
             document.getElementById('lobby-section').style.display = "none";
             document.getElementById('game-section').style.display = "block";
@@ -152,8 +167,11 @@
             });
         }
 
-        // --- UTILITIES ---
-        function logGame(msg) { document.getElementById('game-log').innerHTML += `<br>${msg}`; }
+        function logGame(msg) { 
+            const log = document.getElementById('game-log');
+            log.innerHTML += `<br>${msg}`; 
+            log.scrollTop = log.scrollHeight;
+        }
         
         function renderHand(cards) {
             const container = document.getElementById('my-hand');
