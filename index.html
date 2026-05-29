@@ -9,7 +9,7 @@
         body { background: #1b5e20; color: white; font-family: sans-serif; text-align: center; margin: 0; padding: 10px; }
         .box { background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px; margin: 10px auto; width: 100%; max-width: 450px; box-sizing: border-box; }
         button { padding: 10px; cursor: pointer; background: #ffeb3b; color: #333; border: none; font-weight: bold; border-radius: 5px; margin-top: 10px; width: 100%; }
-        button:disabled { background: #888; cursor: not-allowed; }
+        button:disabled { background: #888; color: #ccc; cursor: not-allowed; }
         .btn-danger { background: #f44336; color: white; }
         input { padding: 10px; margin-top: 5px; border-radius: 4px; border: none; width: 100%; box-sizing: border-box; font-size: 1rem; }
         
@@ -53,15 +53,15 @@
         <h2>Game Board</h2>
         <div id="game-log"></div>
         <div class="card-area" id="my-hand"></div>
-        <button onclick="playSelectedCards()">Play Selected Cards</button>
-        <button class="btn-danger" onclick="revertLastPlay()">Revert Last Play</button>
+        <button id="play-btn" onclick="playSelectedCards()">Play Selected Cards</button>
+        <button id="revert-btn" class="btn-danger" onclick="revertLastPlay()" disabled>Revert Last Play</button>
     </div>
 
     <script>
         let peer, hostConnection, myName;
         let clientConnections = [], players = [];
         let currentHand = [];
-        let lastPlayedCards = []; // Tracks the last move
+        let lastPlayedCards = []; 
         let isHost = false;
 
         const rankOrder = { '3': 0, '4': 1, '5': 2, '6': 3, '7': 4, '8': 5, '9': 6, '10': 7, 'J': 8, 'Q': 9, 'K': 10, 'A': 11, '2': 12 };
@@ -71,7 +71,7 @@
             return cards.sort((a, b) => rankOrder[a.label] - rankOrder[b.label] || suitOrder[a.suit] - suitOrder[b.suit]);
         }
 
-        // --- CORE GAME LOGIC ---
+        // --- GAME LOGIC ---
         function startHost() {
             myName = document.getElementById('host-name').value || "Host";
             isHost = true;
@@ -136,9 +136,12 @@
             const selected = currentHand.filter((_, i) => document.querySelectorAll('.card')[i].classList.contains('selected'));
             if (selected.length === 0) return alert("Select at least one card!");
             
-            lastPlayedCards = [...selected]; // Save for possible revert
+            lastPlayedCards = [...selected]; // Capture state
             currentHand = currentHand.filter(card => !selected.includes(card));
             renderHand(currentHand);
+
+            // Enable Revert Button now that a move was made
+            document.getElementById('revert-btn').disabled = false;
 
             const msg = { type: 'PLAY_CARDS', name: myName, cards: selected };
             if (isHost) {
@@ -150,14 +153,17 @@
         }
 
         function revertLastPlay() {
-            if (lastPlayedCards.length === 0) return alert("Nothing to revert!");
+            if (lastPlayedCards.length === 0) return;
             
             // Add back to hand
             currentHand.push(...lastPlayedCards);
             currentHand = sortCards(currentHand);
             renderHand(currentHand);
             
-            // Notify others
+            // Disable Revert Button so it can't be spammed
+            document.getElementById('revert-btn').disabled = true;
+            lastPlayedCards = []; 
+            
             const msg = { type: 'UNDO_PLAY', name: myName };
             if (isHost) {
                 logGame(`You reverted your last move.`);
@@ -165,7 +171,6 @@
             } else {
                 hostConnection.send(msg);
             }
-            lastPlayedCards = []; // Clear history
         }
 
         function startGame() {
@@ -182,7 +187,6 @@
             });
         }
 
-        // --- UTILITIES ---
         function renderHand(cards) {
             const container = document.getElementById('my-hand');
             container.innerHTML = '';
