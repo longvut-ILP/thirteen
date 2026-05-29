@@ -3,209 +3,152 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tiến Lên Multiplayer - Diagnostics</title>
+    <title>Tiến Lên Multiplayer - 4-Digit Rooms</title>
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <style>
-        body { background: #1b5e20; color: white; font-family: sans-serif; text-align: center; }
-        .box { background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px; margin: 20px auto; width: 350px; max-width: 90%; }
-        button { padding: 10px; cursor: pointer; background: #ffeb3b; color: #333; border: none; font-weight: bold; border-radius: 5px; margin-top: 10px; }
+        body { background: #1b5e20; color: white; font-family: sans-serif; text-align: center; margin: 0; padding: 10px; }
+        .box { background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px; margin: 10px auto; width: 100%; max-width: 450px; box-sizing: border-box; }
+        button { padding: 10px; cursor: pointer; background: #ffeb3b; color: #333; border: none; font-weight: bold; border-radius: 5px; margin-top: 10px; width: 100%; }
         button:disabled { background: #888; cursor: not-allowed; }
-        input { padding: 8px; margin-top: 5px; border-radius: 4px; border: none; width: 80%; }
-        #room-id-display { font-weight: bold; color: #ffeb3b; }
+        input { padding: 10px; margin-top: 5px; border-radius: 4px; border: none; width: 100%; box-sizing: border-box; font-size: 1rem; }
         
-        /* Diagnostic Log Styling */
-        #error-log { 
-            background: #000; 
-            color: #0f0; 
-            font-family: monospace; 
-            font-size: 0.8rem; 
-            margin-top: 15px; 
-            padding: 10px; 
-            border-radius: 5px; 
-            text-align: left;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-        }
-
-        ul { list-style-type: none; padding: 0; }
-        li { background: rgba(255,255,255,0.1); margin: 5px 0; padding: 8px; border-radius: 4px; }
+        /* Card Styles */
+        .card-area { display: flex; gap: 5px; justify-content: center; margin-top: 20px; flex-wrap: wrap; }
+        .card { width: 50px; height: 75px; background: white; color: black; border-radius: 5px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 1rem; flex-direction: column; }
+        .red { color: red; }
         
-        /* Sections to toggle */
+        #lobby-room-id { font-weight: bold; color: #ffeb3b; font-size: 2.5em; letter-spacing: 5px; }
+        #error-log { background: #000; color: #0f0; font-family: monospace; font-size: 0.8rem; margin-top: 15px; padding: 10px; border-radius: 5px; text-align: left; }
         #lobby-section, #game-section { display: none; }
     </style>
 </head>
 <body>
 
-    <h1>Tiến Lên Multiplayer</h1>
+    <h1>Tiến Lên</h1>
 
     <div id="setup-section" class="box">
         <div id="host-section">
             <h3>Host a Game</h3>
-            <input type="text" id="host-name" placeholder="Your Name (e.g., Alice)">
-            <br>
+            <input type="text" id="host-name" placeholder="Your Name">
             <button id="create-btn" onclick="startHost()">Create Room</button>
-            <p>Room ID: <span id="room-id-display">...</span></p>
-            
-            <div id="error-log">Waiting for action...</div>
+            <p>Status: <span id="room-id-display">Waiting...</span></p>
         </div>
-        <hr>
+        <hr style="margin: 20px 0;">
         <div id="join-section">
             <h3>Join a Friend</h3>
-            <input type="text" id="join-name" placeholder="Your Name (e.g., Bob)">
-            <input type="text" id="join-id" placeholder="Enter Host ID">
-            <br>
+            <input type="text" id="join-name" placeholder="Your Name">
+            <input type="text" id="join-id" placeholder="Enter 4-Digit PIN" maxlength="4">
             <button onclick="joinRoom()">Join Room</button>
         </div>
+        <div id="error-log">Diagnostics standing by...</div>
     </div>
 
     <div id="lobby-section" class="box">
         <h2>Waiting Lobby</h2>
-        
-        <div style="background: #333; padding: 10px; border-radius: 5px; margin-bottom: 15px;">
-            <p style="margin: 0; font-size: 0.9em; color: #ccc;">Share this Room ID with friends:</p>
-            <span id="lobby-room-id" style="font-weight: bold; color: #ffeb3b; font-size: 1.2em; user-select: all;">...</span>
-        </div>
-
-        <p>Players Connected: <span id="player-count">1</span>/4</p>
-        <ul id="player-list">
-            </ul>
+        <span id="lobby-room-id">...</span>
+        <p>Players: <span id="player-count">1</span>/4</p>
+        <ul id="player-list"></ul>
         <button id="start-game-btn" style="display: none;" onclick="startGame()">Start Game</button>
     </div>
 
-    <div id="game-section" class="box" style="width: 800px; max-width: 95%;">
+    <div id="game-section" class="box" style="max-width: 800px;">
         <h2>Game Board</h2>
-        <p>The game has started! Card UI goes here.</p>
-        <div id="game-log" style="text-align: left; background: #000; padding: 10px; font-family: monospace;"></div>
+        <div id="game-log"></div>
+        <div class="card-area" id="my-hand"></div>
     </div>
 
     <script>
-        let peer;
-        let hostConnection; 
-        let clientConnections = []; 
-        let isHost = false;
-        let players = []; 
+        let peer, hostConnection, isHost = false;
+        let clientConnections = [], players = [];
 
-        // Custom function to print logs directly to the phone screen
         function debugLog(msg) {
-            console.log(msg);
-            const errorLog = document.getElementById('error-log');
-            errorLog.innerText += "\n👉 " + msg;
+            const el = document.getElementById('error-log');
+            if (el.innerText === "Diagnostics standing by...") el.innerText = "";
+            el.innerText += "👉 " + msg + "\n";
         }
 
-        // -----------------------------------------------------
-        // HOST LOGIC
-        // -----------------------------------------------------
         function startHost() {
             const myName = document.getElementById('host-name').value || "Host";
-            const display = document.getElementById('room-id-display');
-            const errorLog = document.getElementById('error-log');
-            
-            display.innerText = "Connecting...";
-            errorLog.innerText = "Starting diagnostics..."; // Reset log
-
-            debugLog("Step 1: Button clicked.");
-
-            peer = new Peer(null, { 
-                debug: 3, 
-                config: {
-                    'iceServers': [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' }
-                    ]
-                }
-            }); 
-
-            debugLog("Step 2: Peer created. Reaching out to server...");
-
-            peer.on('open', (id) => {
-                debugLog("Step 3: SUCCESS! ID Generated.");
-                
-                display.innerText = id;
-                document.getElementById('lobby-room-id').innerText = id; 
-                document.getElementById('create-btn').disabled = true;
-                isHost = true;
-                
-                players.push(myName);
-                
-                document.getElementById('setup-section').style.display = "none";
-                document.getElementById('lobby-section').style.display = "block";
-                document.getElementById('start-game-btn').style.display = "inline-block"; 
-                updateLobbyUI();
-            });
-
-            peer.on('error', (err) => {
-                debugLog("❌ ERROR: " + err.type);
-                display.innerText = "Failed";
-            });
-
-            // Listen for incoming client connections
-            peer.on('connection', (conn) => {
-                clientConnections.push(conn);
-                conn.on('open', () => debugLog("New client connected!"));
-                conn.on('data', (data) => {
-                    if (data.type === 'JOIN_LOBBY') {
-                        players.push(data.name);
-                        updateLobbyUI();
-                        broadcastToClients({ type: 'UPDATE_LOBBY_UI', players: players });
-                    }
+            function attemptHostConnection() {
+                const randomPIN = Math.floor(1000 + Math.random() * 9000).toString();
+                peer = new Peer(randomPIN);
+                peer.on('open', (id) => {
+                    document.getElementById('lobby-room-id').innerText = id;
+                    document.getElementById('setup-section').style.display = "none";
+                    document.getElementById('lobby-section').style.display = "block";
+                    document.getElementById('start-game-btn').style.display = "block";
+                    players.push(myName);
                 });
-            });
-        }
-
-        function broadcastToClients(dataObj) {
-            clientConnections.forEach(conn => conn.send(dataObj));
+                peer.on('connection', (conn) => {
+                    clientConnections.push(conn);
+                    conn.on('data', (data) => {
+                        if (data.type === 'JOIN_LOBBY') {
+                            players.push(data.name);
+                            broadcastToClients({ type: 'UPDATE_LOBBY', players: players });
+                        }
+                    });
+                });
+                peer.on('error', (err) => { if(err.type === 'unavailable-id') attemptHostConnection(); });
+            }
+            attemptHostConnection();
         }
 
         function startGame() {
             document.getElementById('lobby-section').style.display = "none";
             document.getElementById('game-section').style.display = "block";
-            broadcastToClients({ type: 'START_GAME' });
-            document.getElementById('game-log').innerText += "\nHost started the game. Dealing cards...";
+            
+            const deck = generateDeck();
+            shuffle(deck);
+            renderHand(deck.slice(0, 13));
+            
+            clientConnections.forEach((c, i) => {
+                c.send({ type: 'DEAL', cards: deck.slice((i + 1) * 13, (i + 2) * 13) });
+            });
         }
 
-        // -----------------------------------------------------
-        // CLIENT LOGIC
-        // -----------------------------------------------------
         function joinRoom() {
-            const hostId = document.getElementById('join-id').value;
-            const myName = document.getElementById('join-name').value || "Player";
-            if(!hostId) return alert("Please enter a Room ID");
-            
+            const hostId = document.getElementById('join-id').value.trim();
             peer = new Peer();
-            
             peer.on('open', () => {
                 hostConnection = peer.connect(hostId);
                 hostConnection.on('open', () => {
                     document.getElementById('setup-section').style.display = "none";
                     document.getElementById('lobby-section').style.display = "block";
-                    hostConnection.send({ type: 'JOIN_LOBBY', name: myName });
+                    hostConnection.send({ type: 'JOIN_LOBBY', name: document.getElementById('join-name').value });
                 });
-
                 hostConnection.on('data', (data) => {
-                    if (data.type === 'UPDATE_LOBBY_UI') {
-                        players = data.players;
-                        updateLobbyUI();
-                    }
-                    if (data.type === 'START_GAME') {
-                        document.getElementById('lobby-section').style.display = "none";
-                        document.getElementById('game-section').style.display = "block";
-                        document.getElementById('game-log').innerText += "\nGame started! Waiting for cards...";
-                    }
+                    if (data.type === 'DEAL') renderHand(data.cards);
+                    if (data.type === 'UPDATE_LOBBY') { players = data.players; /* update UI */ }
                 });
             });
-            peer.on('error', (err) => alert("Connection failed: " + err.type));
         }
 
-        function updateLobbyUI() {
-            document.getElementById('player-count').innerText = players.length;
-            const list = document.getElementById('player-list');
-            list.innerHTML = ""; 
-            players.forEach(name => {
-                let li = document.createElement('li');
-                li.innerText = name;
-                list.appendChild(li);
+        // --- CORE CARD LOGIC ---
+        function generateDeck() {
+            const suits = ['♠', '♣', '♦', '♥'];
+            const labels = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
+            return labels.flatMap(l => suits.map(s => ({label: l, suit: s, color: (s==='♦'||s==='♥') ? 'red' : 'black'})));
+        }
+
+        function shuffle(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+        }
+
+        function renderHand(cards) {
+            const container = document.getElementById('my-hand');
+            container.innerHTML = '';
+            cards.forEach(c => {
+                const div = document.createElement('div');
+                div.className = `card ${c.color}`;
+                div.innerHTML = `${c.label}<br>${c.suit}`;
+                container.appendChild(div);
             });
         }
+
+        function broadcastToClients(data) { clientConnections.forEach(c => c.send(data)); }
     </script>
 </body>
 </html>
