@@ -10,6 +10,7 @@
         .box { background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px; margin: 10px auto; width: 100%; max-width: 450px; box-sizing: border-box; }
         button { padding: 10px; cursor: pointer; background: #ffeb3b; color: #333; border: none; font-weight: bold; border-radius: 5px; margin-top: 10px; width: 100%; }
         button:disabled { background: #888; cursor: not-allowed; }
+        .btn-danger { background: #f44336; color: white; }
         input { padding: 10px; margin-top: 5px; border-radius: 4px; border: none; width: 100%; box-sizing: border-box; font-size: 1rem; }
         
         .card-area { display: flex; gap: 5px; justify-content: center; margin-top: 20px; flex-wrap: wrap; }
@@ -53,15 +54,24 @@
         <div id="game-log"></div>
         <div class="card-area" id="my-hand"></div>
         <button onclick="playSelectedCards()">Play Selected Cards</button>
+        <button class="btn-danger" onclick="revertLastPlay()">Revert Last Play</button>
     </div>
 
     <script>
         let peer, hostConnection, myName;
         let clientConnections = [], players = [];
         let currentHand = [];
+        let lastPlayedCards = []; // Tracks the last move
         let isHost = false;
 
-        // --- HOST LOGIC ---
+        const rankOrder = { '3': 0, '4': 1, '5': 2, '6': 3, '7': 4, '8': 5, '9': 6, '10': 7, 'J': 8, 'Q': 9, 'K': 10, 'A': 11, '2': 12 };
+        const suitOrder = { '♠': 0, '♣': 1, '♦': 2, '♥': 3 };
+
+        function sortCards(cards) {
+            return cards.sort((a, b) => rankOrder[a.label] - rankOrder[b.label] || suitOrder[a.suit] - suitOrder[b.suit]);
+        }
+
+        // --- CORE GAME LOGIC ---
         function startHost() {
             myName = document.getElementById('host-name').value || "Host";
             isHost = true;
@@ -78,16 +88,13 @@
                 });
                 peer.on('connection', (conn) => {
                     clientConnections.push(conn);
-                    conn.on('data', (data) => {
-                        handleIncomingData(data, conn);
-                    });
+                    conn.on('data', (data) => handleIncomingData(data));
                 });
                 peer.on('error', (err) => { if(err.type === 'unavailable-id') attemptHostConnection(); });
             }
             attemptHostConnection();
         }
 
-        // --- CLIENT LOGIC ---
         function joinRoom() {
             myName = document.getElementById('join-name').value || "Player";
             const hostId = document.getElementById('join-id').value.trim();
@@ -99,14 +106,11 @@
                     document.getElementById('lobby-section').style.display = "block";
                     hostConnection.send({ type: 'JOIN_LOBBY', name: myName });
                 });
-                hostConnection.on('data', (data) => {
-                    handleIncomingData(data);
-                });
+                hostConnection.on('data', (data) => handleIncomingData(data));
             });
         }
 
-        // --- SHARED DATA HANDLER ---
-        function handleIncomingData(data, conn = null) {
+        function handleIncomingData(data) {
             if (data.type === 'JOIN_LOBBY') {
                 players.push(data.name);
                 updateLobbyUI();
@@ -118,14 +122,13 @@
                 document.getElementById('game-section').style.display = "block";
             }
             if (data.type === 'DEAL') { currentHand = data.cards; renderHand(currentHand); }
-            
-            // Critical: Handle Play Cards
             if (data.type === 'PLAY_CARDS') {
                 logGame(`${data.name} played: ${data.cards.map(c => c.label+c.suit).join(', ')}`);
-                if (isHost) {
-                    // Host broadcasts to everyone (including sender to confirm receipt)
-                    broadcastToClients({ type: 'PLAY_CARDS', name: data.name, cards: data.cards });
-                }
+                if (isHost) broadcastToClients({ type: 'PLAY_CARDS', name: data.name, cards: data.cards });
+            }
+            if (data.type === 'UNDO_PLAY') {
+                logGame(`${data.name} reverted their last move.`);
+                if (isHost) broadcastToClients({ type: 'UNDO_PLAY', name: data.name });
             }
         }
 
@@ -133,46 +136,53 @@
             const selected = currentHand.filter((_, i) => document.querySelectorAll('.card')[i].classList.contains('selected'));
             if (selected.length === 0) return alert("Select at least one card!");
             
-            // Remove from hand
+            lastPlayedCards = [...selected]; // Save for possible revert
             currentHand = currentHand.filter(card => !selected.includes(card));
             renderHand(currentHand);
 
             const msg = { type: 'PLAY_CARDS', name: myName, cards: selected };
-            
             if (isHost) {
-                // If I am host, process locally then broadcast
                 logGame(`You played: ${selected.map(c => c.label+c.suit).join(', ')}`);
                 broadcastToClients(msg);
             } else {
-                // If I am client, send to host
-                if (hostConnection && hostConnection.open) {
-                    hostConnection.send(msg);
-                } else {
-                    alert("Connection lost!");
-                }
+                hostConnection.send(msg);
             }
         }
 
-        // --- UTILITIES ---
+        function revertLastPlay() {
+            if (lastPlayedCards.length === 0) return alert("Nothing to revert!");
+            
+            // Add back to hand
+            currentHand.push(...lastPlayedCards);
+            currentHand = sortCards(currentHand);
+            renderHand(currentHand);
+            
+            // Notify others
+            const msg = { type: 'UNDO_PLAY', name: myName };
+            if (isHost) {
+                logGame(`You reverted your last move.`);
+                broadcastToClients(msg);
+            } else {
+                hostConnection.send(msg);
+            }
+            lastPlayedCards = []; // Clear history
+        }
+
         function startGame() {
             document.getElementById('lobby-section').style.display = "none";
             document.getElementById('game-section').style.display = "block";
             const deck = generateDeck();
             shuffle(deck);
-            currentHand = deck.slice(0, 13);
+            currentHand = sortCards(deck.slice(0, 13));
             renderHand(currentHand);
             clientConnections.forEach((c, i) => {
+                const hand = sortCards(deck.slice((i + 1) * 13, (i + 2) * 13));
                 c.send({ type: 'START_GAME' });
-                c.send({ type: 'DEAL', cards: deck.slice((i + 1) * 13, (i + 2) * 13) });
+                c.send({ type: 'DEAL', cards: hand });
             });
         }
 
-        function logGame(msg) { 
-            const log = document.getElementById('game-log');
-            log.innerHTML += `<br>${msg}`; 
-            log.scrollTop = log.scrollHeight;
-        }
-        
+        // --- UTILITIES ---
         function renderHand(cards) {
             const container = document.getElementById('my-hand');
             container.innerHTML = '';
@@ -185,15 +195,10 @@
             });
         }
 
-        function updateLobbyUI() {
-            document.getElementById('player-count').innerText = players.length;
-            const list = document.getElementById('player-list');
-            list.innerHTML = ""; 
-            players.forEach(name => {
-                let li = document.createElement('li');
-                li.innerText = name;
-                list.appendChild(li);
-            });
+        function logGame(msg) { 
+            const log = document.getElementById('game-log');
+            log.innerHTML += `<br>${msg}`; 
+            log.scrollTop = log.scrollHeight;
         }
 
         function generateDeck() {
@@ -207,6 +212,17 @@
                 const j = Math.floor(Math.random() * (i + 1));
                 [array[i], array[j]] = [array[j], array[i]];
             }
+        }
+
+        function updateLobbyUI() {
+            document.getElementById('player-count').innerText = players.length;
+            const list = document.getElementById('player-list');
+            list.innerHTML = ""; 
+            players.forEach(name => {
+                let li = document.createElement('li');
+                li.innerText = name;
+                list.appendChild(li);
+            });
         }
 
         function broadcastToClients(data) { clientConnections.forEach(c => c.send(data)); }
