@@ -2,76 +2,204 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Tiến Lên Multiplayer - Fixed</title>
+    <title>Tiến Lên Multiplayer - Lobby Phase</title>
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <style>
         body { background: #1b5e20; color: white; font-family: sans-serif; text-align: center; }
-        .setup-box { background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px; margin: 20px auto; width: 300px; }
-        button { padding: 10px; cursor: pointer; background: #ffeb3b; border: none; font-weight: bold; border-radius: 5px; }
+        .box { background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px; margin: 20px auto; width: 350px; }
+        button { padding: 10px; cursor: pointer; background: #ffeb3b; color: #333; border: none; font-weight: bold; border-radius: 5px; margin-top: 10px; }
+        button:disabled { background: #888; cursor: not-allowed; }
+        input { padding: 8px; margin-top: 5px; border-radius: 4px; border: none; width: 80%; }
         #room-id-display { font-weight: bold; color: #ffeb3b; }
         .error { color: #ff5252; font-size: 0.8rem; margin-top: 10px; }
+        ul { list-style-type: none; padding: 0; }
+        li { background: rgba(255,255,255,0.1); margin: 5px 0; padding: 8px; border-radius: 4px; }
+        
+        /* Sections to toggle */
+        #lobby-section, #game-section { display: none; }
     </style>
 </head>
 <body>
 
     <h1>Tiến Lên Multiplayer</h1>
 
-    <div id="setup" class="setup-box">
+    <div id="setup-section" class="box">
         <div id="host-section">
-            <button id="create-btn" onclick="startHost()">Create Room (Host)</button>
+            <h3>Host a Game</h3>
+            <input type="text" id="host-name" placeholder="Your Name (e.g., Alice)">
+            <br>
+            <button id="create-btn" onclick="startHost()">Create Room</button>
             <p>Room ID: <span id="room-id-display">...</span></p>
             <div id="error-log" class="error"></div>
         </div>
         <hr>
         <div id="join-section">
+            <h3>Join a Friend</h3>
+            <input type="text" id="join-name" placeholder="Your Name (e.g., Bob)">
             <input type="text" id="join-id" placeholder="Enter Host ID">
-            <button onclick="joinRoom()">Join Friend</button>
+            <br>
+            <button onclick="joinRoom()">Join Room</button>
         </div>
+    </div>
+
+    <div id="lobby-section" class="box">
+        <h2>Waiting Lobby</h2>
+
+	<div style="background: #333; padding: 10px; border-radius: 5px; margin-bottom: 15px;">
+            <p style="margin: 0; font-size: 0.9em; color: #ccc;">Share this Room ID with friends:</p>
+            <span id="lobby-room-id" style="font-weight: bold; color: #ffeb3b; font-size: 1.2em; user-select: all;">...</span>
+        </div>
+
+        <p>Players Connected: <span id="player-count">1</span>/4</p>
+        <ul id="player-list">
+            </ul>
+        <button id="start-game-btn" style="display: none;" onclick="startGame()">Start Game</button>
+    </div>
+
+    <div id="game-section" class="box" style="width: 800px;">
+        <h2>Game Board</h2>
+        <p>The game has started! Card UI goes here.</p>
+        <div id="game-log"></div>
     </div>
 
     <script>
         let peer;
-        let connections = [];
+        let hostConnection; // For clients to talk to host
+        let clientConnections = []; // For host to talk to clients
+        let isHost = false;
+        let players = []; // Array of player names
 
+        // -----------------------------------------------------
+        // HOST LOGIC
+        // -----------------------------------------------------
         function startHost() {
+            const myName = document.getElementById('host-name').value || "Host";
             const display = document.getElementById('room-id-display');
             const errorLog = document.getElementById('error-log');
             
             display.innerText = "Connecting...";
             errorLog.innerText = "";
 
-            // Initialize PeerJS
-            // debug: 3 provides detailed console logs to help you troubleshoot
-            peer = new Peer(null, { debug: 3 }); 
+            peer = new Peer(null, { debug: 2 }); 
 
             peer.on('open', (id) => {
                 display.innerText = id;
                 document.getElementById('create-btn').disabled = true;
-                console.log("My peer ID is: " + id);
+                isHost = true;
+                
+                // Add host to the player list
+                players.push(myName);
+                
+                // Transition UI to Lobby
+                document.getElementById('setup-section').style.display = "none";
+                document.getElementById('lobby-section').style.display = "block";
+                document.getElementById('start-game-btn').style.display = "inline-block"; // Only host sees this
+                updateLobbyUI();
             });
 
             peer.on('error', (err) => {
-                console.error("PeerJS Error:", err);
                 errorLog.innerText = "Error: " + err.type;
                 display.innerText = "Failed";
             });
 
-            peer.on('connection', (c) => {
-                connections.push(c);
-                console.log("New connection established!");
+            // Listen for incoming client connections
+            peer.on('connection', (conn) => {
+                clientConnections.push(conn);
+                
+                conn.on('open', () => {
+                    console.log("New client connected!");
+                });
+
+                // Listen for messages from clients
+                conn.on('data', (data) => {
+                    if (data.type === 'JOIN_LOBBY') {
+                        players.push(data.name);
+                        updateLobbyUI();
+                        
+                        // Tell ALL clients about the updated player list
+                        broadcastToClients({
+                            type: 'UPDATE_LOBBY_UI',
+                            players: players
+                        });
+                    }
+                });
             });
         }
 
+        function broadcastToClients(dataObj) {
+            clientConnections.forEach(conn => conn.send(dataObj));
+        }
+
+        function startGame() {
+            // Transition Host UI
+            document.getElementById('lobby-section').style.display = "none";
+            document.getElementById('game-section').style.display = "block";
+            
+            // Tell all clients to transition their UI
+            broadcastToClients({ type: 'START_GAME' });
+            
+            // Note: This is where you will eventually generate a deck, 
+            // shuffle it, and send specific hands to specific clients.
+            document.getElementById('game-log').innerText += "\nHost started the game. Dealing cards...";
+        }
+
+        // -----------------------------------------------------
+        // CLIENT LOGIC
+        // -----------------------------------------------------
         function joinRoom() {
             const hostId = document.getElementById('join-id').value;
+            const myName = document.getElementById('join-name').value || "Player";
             if(!hostId) return alert("Please enter a Room ID");
             
             peer = new Peer();
+            
             peer.on('open', () => {
-                const conn = peer.connect(hostId);
-                conn.on('open', () => console.log("Connected to host!"));
+                hostConnection = peer.connect(hostId);
+                
+                hostConnection.on('open', () => {
+                    console.log("Connected to host!");
+                    
+                    // Transition UI to Lobby
+                    document.getElementById('setup-section').style.display = "none";
+                    document.getElementById('lobby-section').style.display = "block";
+                    
+                    // Tell the host my name
+                    hostConnection.send({
+                        type: 'JOIN_LOBBY',
+                        name: myName
+                    });
+                });
+
+                // Listen for messages from the Host
+                hostConnection.on('data', (data) => {
+                    if (data.type === 'UPDATE_LOBBY_UI') {
+                        players = data.players;
+                        updateLobbyUI();
+                    }
+                    if (data.type === 'START_GAME') {
+                        document.getElementById('lobby-section').style.display = "none";
+                        document.getElementById('game-section').style.display = "block";
+                        document.getElementById('game-log').innerText += "\nGame started! Waiting for cards from host...";
+                    }
+                });
             });
+
             peer.on('error', (err) => alert("Connection failed: " + err.type));
+        }
+
+        // -----------------------------------------------------
+        // SHARED UI LOGIC
+        // -----------------------------------------------------
+        function updateLobbyUI() {
+            document.getElementById('player-count').innerText = players.length;
+            const list = document.getElementById('player-list');
+            list.innerHTML = ""; // Clear current list
+            
+            players.forEach(name => {
+                let li = document.createElement('li');
+                li.innerText = name;
+                list.appendChild(li);
+            });
         }
     </script>
 </body>
