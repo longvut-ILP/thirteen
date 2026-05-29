@@ -13,13 +13,13 @@
         .btn-danger { background: #f44336; color: white; }
         .btn-pass { background: #2196f3; color: white; }
         
+        /* Card & Table Styles */
         .card-area { display: flex; gap: 5px; justify-content: center; margin-top: 20px; flex-wrap: wrap; }
         .card { width: 50px; height: 75px; background: white; color: black; border-radius: 5px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 1rem; flex-direction: column; cursor: pointer; border: 2px solid transparent; transition: transform 0.2s; }
         .card.selected { border: 2px solid #ffeb3b; transform: translateY(-10px); }
         .red { color: red; }
         
         #table-area { min-height: 90px; border: 2px dashed rgba(255,255,255,0.3); padding: 10px; margin-bottom: 20px; border-radius: 10px; display: flex; justify-content: center; gap: 5px; flex-wrap: wrap; }
-        #scoreboard { background: rgba(255,255,255,0.1); padding: 10px; border-radius: 5px; margin-bottom: 10px; font-weight: bold; }
         
         #lobby-section, #game-section { display: none; }
         #game-log { text-align: left; background: #000; color: #0f0; padding: 10px; font-family: monospace; height: 80px; overflow-y: scroll; margin-bottom: 10px; font-size: 0.8rem; }
@@ -33,14 +33,14 @@
         <div id="host-section">
             <h3>Host a Game</h3>
             <input type="text" id="host-name" placeholder="Your Name">
-            <button id="create-btn">Create Room</button>
+            <button id="create-btn" onclick="startHost()">Create Room</button>
         </div>
         <hr>
         <div id="join-section">
             <h3>Join a Friend</h3>
             <input type="text" id="join-name" placeholder="Your Name">
             <input type="text" id="join-id" placeholder="Enter 4-Digit PIN" maxlength="4">
-            <button id="join-btn">Join Room</button>
+            <button onclick="joinRoom()">Join Room</button>
         </div>
     </div>
 
@@ -49,36 +49,22 @@
         <h1 id="lobby-room-id">...</h1>
         <p>Players: <span id="player-count">1</span>/4</p>
         <ul id="player-list"></ul>
-        <button id="start-game-btn" style="display: none;">Start Game</button>
+        <button id="start-game-btn" style="display: none;" onclick="startGame()">Start Game</button>
     </div>
 
     <div id="game-section" class="box" style="max-width: 800px;">
         <h2>Game Board</h2>
-        <div id="scoreboard">Waiting for players to finish...</div>
         <div id="table-area"></div>
         <div id="game-log"></div>
         <div class="card-area" id="my-hand"></div>
-        <div id="action-controls">
-            <button id="play-btn">Play Selected Cards</button>
-            <button id="pass-btn" class="btn-pass">Pass</button>
-            <button id="revert-btn" class="btn-danger" disabled>Revert Last Play</button>
-        </div>
+        <button id="play-btn" onclick="playSelectedCards()">Play Selected Cards</button>
+        <button class="btn-pass" onclick="passTurn()">Pass</button>
+        <button id="revert-btn" class="btn-danger" onclick="revertLastPlay()" disabled>Revert Last Play</button>
     </div>
 
     <script>
-        // Setup Event Listeners after DOM loads
-        document.addEventListener('DOMContentLoaded', () => {
-            document.getElementById('create-btn').addEventListener('click', startHost);
-            document.getElementById('join-btn').addEventListener('click', joinRoom);
-            document.getElementById('start-game-btn').addEventListener('click', startGame);
-            document.getElementById('play-btn').addEventListener('click', playSelectedCards);
-            document.getElementById('pass-btn').addEventListener('click', passTurn);
-            document.getElementById('revert-btn').addEventListener('click', revertLastPlay);
-        });
-
         let peer, hostConnection, myName;
         let clientConnections = [], players = [];
-        let finishers = [];
         let currentHand = [];
         let lastPlayedCards = []; 
         let isHost = false;
@@ -90,6 +76,7 @@
             return cards.sort((a, b) => rankOrder[a.label] - rankOrder[b.label] || suitOrder[a.suit] - suitOrder[b.suit]);
         }
 
+        // --- CORE UI HELPERS ---
         function createCardElement(card, isSelectable = false) {
             const div = document.createElement('div');
             div.className = `card ${card.color}`;
@@ -104,43 +91,7 @@
             cards.forEach(c => container.appendChild(createCardElement(c, false)));
         }
 
-        function handleIncomingData(data) {
-            if (data.type === 'JOIN_LOBBY') {
-                players.push(data.name);
-                updateLobbyUI();
-                broadcastToClients({ type: 'UPDATE_LOBBY', players: players });
-            }
-            if (data.type === 'UPDATE_LOBBY') { players = data.players; updateLobbyUI(); }
-            if (data.type === 'START_GAME') {
-                document.getElementById('lobby-section').style.display = "none";
-                document.getElementById('game-section').style.display = "block";
-            }
-            if (data.type === 'DEAL') { currentHand = data.cards; renderHand(currentHand); }
-            if (data.type === 'PLAY_CARDS') {
-                renderTable(data.cards);
-                logGame(`${data.name} played.`);
-                if (isHost) broadcastToClients({ type: 'PLAY_CARDS', name: data.name, cards: data.cards });
-            }
-            if (data.type === 'PLAYER_FINISHED') {
-                finishers.push({ name: data.name, rank: getRankSuffix(finishers.length + 1) });
-                updateScoreboard();
-                broadcastToClients({ type: 'UPDATE_LEADERBOARD', finishers: finishers });
-            }
-            if (data.type === 'UPDATE_LEADERBOARD') {
-                finishers = data.finishers;
-                updateScoreboard();
-            }
-            if (data.type === 'UNDO_PLAY') {
-                document.getElementById('table-area').innerHTML = '';
-                logGame(`${data.name} reverted move.`);
-                if (isHost) broadcastToClients({ type: 'UNDO_PLAY', name: data.name });
-            }
-            if (data.type === 'PASS') {
-                logGame(`${data.name} passed.`);
-                if (isHost) broadcastToClients({ type: 'PASS', name: data.name });
-            }
-        }
-
+        // --- HOST/CLIENT SETUP ---
         function startHost() {
             myName = document.getElementById('host-name').value || "Host";
             isHost = true;
@@ -179,6 +130,37 @@
             });
         }
 
+        // --- MESSAGE HANDLING ---
+        function handleIncomingData(data) {
+            if (data.type === 'JOIN_LOBBY') {
+                players.push(data.name);
+                updateLobbyUI();
+                broadcastToClients({ type: 'UPDATE_LOBBY', players: players });
+            }
+            if (data.type === 'UPDATE_LOBBY') { players = data.players; updateLobbyUI(); }
+            if (data.type === 'START_GAME') {
+                document.getElementById('lobby-section').style.display = "none";
+                document.getElementById('game-section').style.display = "block";
+            }
+            if (data.type === 'DEAL') { currentHand = data.cards; renderHand(currentHand); }
+            
+            if (data.type === 'PLAY_CARDS') {
+                renderTable(data.cards);
+                logGame(`${data.name} played.`);
+                if (isHost) broadcastToClients({ type: 'PLAY_CARDS', name: data.name, cards: data.cards });
+            }
+            if (data.type === 'UNDO_PLAY') {
+                document.getElementById('table-area').innerHTML = '';
+                logGame(`${data.name} reverted their last move.`);
+                if (isHost) broadcastToClients({ type: 'UNDO_PLAY', name: data.name });
+            }
+            if (data.type === 'PASS') {
+                logGame(`${data.name} passed.`);
+                if (isHost) broadcastToClients({ type: 'PASS', name: data.name });
+            }
+        }
+
+        // --- ACTIONS ---
         function playSelectedCards() {
             const selected = currentHand.filter((_, i) => document.querySelectorAll('#my-hand .card')[i].classList.contains('selected'));
             if (selected.length === 0) return alert("Select at least one card!");
@@ -186,10 +168,9 @@
             lastPlayedCards = [...selected];
             currentHand = currentHand.filter(card => !selected.includes(card));
             renderHand(currentHand);
-            renderTable(selected);
+            renderTable(selected); // Visual update
             document.getElementById('revert-btn').disabled = false;
-            if (currentHand.length === 1) alert("WARNING: You are on your last card!");
-            
+
             const msg = { type: 'PLAY_CARDS', name: myName, cards: selected };
             if (isHost) {
                 logGame(`You played.`);
@@ -197,31 +178,6 @@
             } else {
                 hostConnection.send(msg);
             }
-            if (currentHand.length === 0) {
-                document.getElementById('action-controls').style.display = 'none';
-                const finishMsg = { type: 'PLAYER_FINISHED', name: myName };
-                if (isHost) {
-                    finishers.push({ name: myName, rank: getRankSuffix(finishers.length + 1) });
-                    updateScoreboard();
-                    broadcastToClients(finishMsg);
-                    broadcastToClients({ type: 'UPDATE_LEADERBOARD', finishers: finishers });
-                } else {
-                    hostConnection.send(finishMsg);
-                }
-            }
-        }
-
-        function updateScoreboard() {
-            const sb = document.getElementById('scoreboard');
-            sb.innerHTML = "<strong>Rankings:</strong> " + finishers.map(f => `${f.name} (${f.rank})`).join(', ');
-        }
-
-        function getRankSuffix(i) {
-            const j = i % 10, k = i % 100;
-            if (j == 1 && k != 11) return i + "st";
-            if (j == 2 && k != 12) return i + "nd";
-            if (j == 3 && k != 13) return i + "rd";
-            return i + "th";
         }
 
         function revertLastPlay() {
@@ -232,15 +188,27 @@
             document.getElementById('table-area').innerHTML = '';
             document.getElementById('revert-btn').disabled = true;
             lastPlayedCards = []; 
+            
             const msg = { type: 'UNDO_PLAY', name: myName };
-            if (isHost) { broadcastToClients(msg); } else { hostConnection.send(msg); }
+            if (isHost) {
+                logGame(`You reverted your last move.`);
+                broadcastToClients(msg);
+            } else {
+                hostConnection.send(msg);
+            }
         }
 
         function passTurn() {
             const msg = { type: 'PASS', name: myName };
-            if (isHost) { logGame(`You passed.`); broadcastToClients(msg); } else { hostConnection.send(msg); }
+            if (isHost) {
+                logGame(`You passed.`);
+                broadcastToClients(msg);
+            } else {
+                hostConnection.send(msg);
+            }
         }
 
+        // --- UTILITIES ---
         function startGame() {
             document.getElementById('lobby-section').style.display = "none";
             document.getElementById('game-section').style.display = "block";
