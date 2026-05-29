@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Tiến Lên Multiplayer - 4-Digit Rooms</title>
+    <title>Tiến Lên Multiplayer</title>
     <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
     <style>
         body { background: #1b5e20; color: white; font-family: sans-serif; text-align: center; margin: 0; padding: 10px; }
@@ -53,12 +53,12 @@
 
     <div id="game-section" class="box" style="max-width: 800px;">
         <h2>Game Board</h2>
-        <div id="game-log"></div>
+        <div id="game-log" style="font-family: monospace;">Game Started!</div>
         <div class="card-area" id="my-hand"></div>
     </div>
 
     <script>
-        let peer, hostConnection, isHost = false;
+        let peer, hostConnection;
         let clientConnections = [], players = [];
 
         function debugLog(msg) {
@@ -67,6 +67,7 @@
             el.innerText += "👉 " + msg + "\n";
         }
 
+        // --- HOST LOGIC ---
         function startHost() {
             const myName = document.getElementById('host-name').value || "Host";
             function attemptHostConnection() {
@@ -78,12 +79,14 @@
                     document.getElementById('lobby-section').style.display = "block";
                     document.getElementById('start-game-btn').style.display = "block";
                     players.push(myName);
+                    updateLobbyUI();
                 });
                 peer.on('connection', (conn) => {
                     clientConnections.push(conn);
                     conn.on('data', (data) => {
                         if (data.type === 'JOIN_LOBBY') {
                             players.push(data.name);
+                            updateLobbyUI();
                             broadcastToClients({ type: 'UPDATE_LOBBY', players: players });
                         }
                     });
@@ -102,10 +105,12 @@
             renderHand(deck.slice(0, 13));
             
             clientConnections.forEach((c, i) => {
+                c.send({ type: 'START_GAME' });
                 c.send({ type: 'DEAL', cards: deck.slice((i + 1) * 13, (i + 2) * 13) });
             });
         }
 
+        // --- CLIENT LOGIC ---
         function joinRoom() {
             const hostId = document.getElementById('join-id').value.trim();
             peer = new Peer();
@@ -117,13 +122,31 @@
                     hostConnection.send({ type: 'JOIN_LOBBY', name: document.getElementById('join-name').value });
                 });
                 hostConnection.on('data', (data) => {
+                    if (data.type === 'UPDATE_LOBBY') { 
+                        players = data.players; 
+                        updateLobbyUI(); 
+                    }
+                    if (data.type === 'START_GAME') {
+                        document.getElementById('lobby-section').style.display = "none";
+                        document.getElementById('game-section').style.display = "block";
+                    }
                     if (data.type === 'DEAL') renderHand(data.cards);
-                    if (data.type === 'UPDATE_LOBBY') { players = data.players; /* update UI */ }
                 });
             });
         }
 
-        // --- CORE CARD LOGIC ---
+        // --- SHARED UTILITIES ---
+        function updateLobbyUI() {
+            document.getElementById('player-count').innerText = players.length;
+            const list = document.getElementById('player-list');
+            list.innerHTML = ""; 
+            players.forEach(name => {
+                let li = document.createElement('li');
+                li.innerText = name;
+                list.appendChild(li);
+            });
+        }
+
         function generateDeck() {
             const suits = ['♠', '♣', '♦', '♥'];
             const labels = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
