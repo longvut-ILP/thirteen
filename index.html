@@ -78,6 +78,9 @@ button:disabled { background: #888; color: #ccc; cursor: not-allowed; }
 #chat-input { flex-grow: 1; padding: 8px; border-radius: 5px; border: none; }
 #send-chat-btn { width: auto; margin-top: 0; padding: 8px 15px; }
 
+/* Diagnostic Box */
+#error-log { background: rgba(0,0,0,0.8); color: #0f0; padding: 10px; border-radius: 5px; margin-top: 15px; font-family: monospace; font-size: 0.8rem; text-align: left; height: 100px; overflow-y: auto; }
+
 /* --- MOBILE RESPONSIVE TWEAKS --- */
 @media (max-width: 600px) {
   body { padding: 5px; }
@@ -89,6 +92,9 @@ button:disabled { background: #888; color: #ccc; cursor: not-allowed; }
   h1, h2 { font-size: 1.5rem; margin: 10px 0; }
   #timer-display { font-size: 1.2rem; }
   .winner-banner { font-size: 1.8rem; }
+  
+  ul { list-style-type: none; padding: 0; }
+  li { background: rgba(255,255,255,0.1); margin: 5px 0; padding: 8px; border-radius: 4px; font-size: 1.2rem; }
 }
 </style>
 </head>
@@ -97,25 +103,30 @@ button:disabled { background: #888; color: #ccc; cursor: not-allowed; }
 <div id="setup-section" class="box">
 <div id="host-section">
 <h3>Host a Game</h3>
-<input type="text" id="host-name" placeholder="Your Name" style="width:90%; padding:8px; margin-bottom:5px;">
+<input type="text" id="host-name" placeholder="Your Name (e.g., Alice)" style="width:90%; padding:8px; margin-bottom:5px;">
 <button id="create-btn">Create Room</button>
+<p style="margin-bottom: 5px;">Status: <span id="room-id-display">Waiting...</span></p>
 </div>
-<hr>
+<hr style="border-color: rgba(255,255,255,0.2); margin: 20px 0;">
 <div id="join-section">
 <h3>Join a Friend</h3>
-<input type="text" id="join-name" placeholder="Your Name" style="width:90%; padding:8px; margin-bottom:5px;">
-<input type="text" id="join-id" placeholder="Enter 4-Digit PIN" maxlength="4" style="width:90%; padding:8px;">
+<input type="text" id="join-name" placeholder="Your Name (e.g., Bob)" style="width:90%; padding:8px; margin-bottom:5px;">
+<input type="text" id="join-id" placeholder="Enter 4-Digit Room PIN" maxlength="4" style="width:90%; padding:8px;">
 <button id="join-btn">Join Room</button>
 </div>
+<div id="error-log">Diagnostics standing by...</div>
 </div>
-<div id="lobby-section" class="box">
+<div id="lobby-section" class="box" style="display: none;">
 <h2>Waiting Lobby</h2>
-<h1 id="lobby-room-id">...</h1>
-<p>Players: <span id="player-count">1</span>/4</p>
-<ul id="player-list" style="list-style:none; padding:0;"></ul>
+<div style="background: #333; padding: 10px; border-radius: 5px; margin-bottom: 15px;">
+<p style="margin: 0 0 5px 0; font-size: 0.9em; color: #ccc;">Tell your friends to enter this PIN:</p>
+<span id="lobby-room-id" style="font-size: 2rem; font-weight: bold; letter-spacing: 5px; color: #ffeb3b;">...</span>
+</div>
+<p>Players Connected: <span id="player-count">1</span>/4</p>
+<ul id="player-list"></ul>
 <button id="start-game-btn" style="display: none;">Start Game / Next Round</button>
 </div>
-<div id="game-section" class="box" style="max-width: 800px;">
+<div id="game-section" class="box" style="max-width: 800px; display: none;">
 <h2>Game Board</h2>
 
 <!-- Turn Indicator & Timer -->
@@ -164,19 +175,19 @@ button:disabled { background: #888; color: #ccc; cursor: not-allowed; }
 <script>
 // DOM Event Listeners
 document.addEventListener('DOMContentLoaded', () => {
-document.getElementById('create-btn').addEventListener('click', startHost);
-document.getElementById('join-btn').addEventListener('click', joinRoom);
-document.getElementById('start-game-btn').addEventListener('click', startGame);
-document.getElementById('next-round-btn').addEventListener('click', startGame); // Triggers a new round
-document.getElementById('play-btn').addEventListener('click', playSelectedCards);
-document.getElementById('pass-btn').addEventListener('click', passTurn);
-document.getElementById('revert-btn').addEventListener('click', revertLastPlay);
+    document.getElementById('create-btn').addEventListener('click', startHost);
+    document.getElementById('join-btn').addEventListener('click', joinRoom);
+    document.getElementById('start-game-btn').addEventListener('click', startGame);
+    document.getElementById('next-round-btn').addEventListener('click', startGame); 
+    document.getElementById('play-btn').addEventListener('click', playSelectedCards);
+    document.getElementById('pass-btn').addEventListener('click', passTurn);
+    document.getElementById('revert-btn').addEventListener('click', revertLastPlay);
 
-// Chat Event Listeners
-document.getElementById('send-chat-btn').addEventListener('click', sendChatMessage);
-document.getElementById('chat-input').addEventListener('keypress', function(e) {
-    if (e.key === 'Enter') sendChatMessage();
-});
+    // Chat Event Listeners
+    document.getElementById('send-chat-btn').addEventListener('click', sendChatMessage);
+    document.getElementById('chat-input').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') sendChatMessage();
+    });
 });
 
 let peer, hostConnection, myName;
@@ -186,16 +197,21 @@ let lastPlayedCards = [];
 let finishedPlayers = []; 
 let isHost = false;
 
-// Card counts, Scores & History Tracker
+// Tracker Variables
 let cardCounts = {}; 
 let playerScores = {}; 
-let roundHistory = []; // NEW: Tracks 1st place winners of each round
+let roundHistory = []; 
+let gameLowestCard = null; 
 
-// Turn & Timer Variables
+// Rules & Turn Variables
 let currentTurnIndex = 0; 
 let turnTimerInterval;
 let timeRemaining = 30;
 const TURN_LIMIT = 30;
+
+let currentTableCards = []; 
+let consecutivePasses = 0; 
+let trickLeader = null;
 
 // --- SOUND EFFECTS ---
 const playSound = new Audio('https://actions.google.com/sounds/v1/cartoon/pop.ogg');
@@ -206,284 +222,424 @@ const chatSound = new Audio('https://actions.google.com/sounds/v1/water/water_dr
 const rankOrder = { '3': 0, '4': 1, '5': 2, '6': 3, '7': 4, '8': 5, '9': 6, '10': 7, 'J': 8, 'Q': 9, 'K': 10, 'A': 11, '2': 12 };
 const suitOrder = { '♠': 0, '♣': 1, '♦': 2, '♥': 3 };
 
+function debugLog(msg) {
+    console.log(msg);
+    const errorLog = document.getElementById('error-log');
+    if (errorLog.innerText === "Diagnostics standing by...") errorLog.innerText = "";
+    errorLog.innerText += "👉 " + msg + "\n";
+    errorLog.scrollTop = errorLog.scrollHeight;
+}
+
 function sortCards(cards) {
-return cards.sort((a, b) => rankOrder[a.label] - rankOrder[b.label] || suitOrder[a.suit] - suitOrder[b.suit]);
+    return cards.sort((a, b) => rankOrder[a.label] - rankOrder[b.label] || suitOrder[a.suit] - suitOrder[b.suit]);
+}
+
+// --- NEW RULE VALIDATION LOGIC ---
+function getPlayType(cards) {
+    if (!cards || cards.length === 0) return null;
+    if (cards.length === 1) return 'single';
+    
+    const ranks = cards.map(c => rankOrder[c.label]);
+    
+    // Check for Pair, Triplet, Quartet
+    const allSame = ranks.every(r => r === ranks);
+    if (allSame) {
+        if (cards.length === 2) return 'pair';
+        if (cards.length === 3) return 'triplet';
+        if (cards.length === 4) return 'quartet';
+    }
+
+    // Sequence Detection
+    let isSequence = true;
+    for (let i = 1; i < ranks.length; i++) {
+        if (ranks[i] !== ranks[i - 1] + 1) isSequence = false;
+    }
+    if (ranks.includes(rankOrder['2'])) isSequence = false; 
+    if (isSequence && cards.length >= 3) return 'sequence';
+
+    // Double Sequence Detection
+    if (cards.length >= 6 && cards.length % 2 === 0) {
+        let isDoubleSeq = true;
+        let pairRanks = [];
+        for (let i = 0; i < cards.length; i += 2) {
+            if (ranks[i] !== ranks[i+1]) { isDoubleSeq = false; break; }
+            pairRanks.push(ranks[i]);
+        }
+        if (isDoubleSeq) {
+            for (let i = 1; i < pairRanks.length; i++) {
+                if (pairRanks[i] !== pairRanks[i - 1] + 1) { isDoubleSeq = false; break; }
+            }
+        }
+        if (pairRanks.includes(rankOrder['2'])) isDoubleSeq = false; 
+        if (isDoubleSeq) return 'double_sequence';
+    }
+
+    return null; 
+}
+
+function isValidPlay(selectedCards, tableCards) {
+    const selectedType = getPlayType(selectedCards);
+    if (!selectedType) return false; 
+
+    // If table is empty, any valid shape is allowed
+    if (!tableCards || tableCards.length === 0) return true;
+
+    const tableType = getPlayType(tableCards);
+    const highestSelected = selectedCards[selectedCards.length - 1];
+    const highestTable = tableCards[tableCards.length - 1];
+
+    // --- BOMB LOGIC ---
+    if (tableType === 'single' && highestTable.label === '2') {
+        if (selectedType === 'quartet') return true;
+        if (selectedType === 'double_sequence' && selectedCards.length >= 6) return true;
+    }
+    if (tableType === 'pair' && highestTable.label === '2') {
+        if (selectedType === 'quartet') return true;
+        if (selectedType === 'double_sequence' && selectedCards.length >= 8) return true;
+    }
+    if (tableType === 'triplet' && highestTable.label === '2') {
+        if (selectedType === 'double_sequence' && selectedCards.length >= 10) return true;
+    }
+
+    // --- STANDARD MATCHING LOGIC ---
+    if (selectedType !== tableType || selectedCards.length !== tableCards.length) {
+        return false;
+    }
+
+    const rankDiff = rankOrder[highestSelected.label] - rankOrder[highestTable.label];
+    if (rankDiff > 0) return true; 
+    if (rankDiff === 0 && suitOrder[highestSelected.suit] > suitOrder[highestTable.suit]) return true; 
+    
+    return false;
 }
 
 // --- CORE UI HELPERS ---
 function createCardElement(card, isSelectable = false) {
-const div = document.createElement('div');
-div.className = `card ${card.color}`;
-div.innerHTML = `${card.label}<br>${card.suit}`;
-if (isSelectable) div.onclick = () => div.classList.toggle('selected');
-return div;
+    const div = document.createElement('div');
+    div.className = `card ${card.color}`;
+    div.innerHTML = `${card.label}<br>${card.suit}`;
+    if (isSelectable) div.onclick = () => div.classList.toggle('selected');
+    return div;
 }
 
 function renderTable(cards) {
-const container = document.getElementById('table-area');
-container.innerHTML = '';
-cards.forEach(c => container.appendChild(createCardElement(c, false)));
+    const container = document.getElementById('table-area');
+    container.innerHTML = '';
+    cards.forEach(c => container.appendChild(createCardElement(c, false)));
 }
 
 // --- HOST/CLIENT SETUP ---
 function startHost() {
-myName = document.getElementById('host-name').value || "Host";
-isHost = true;
-function attemptHostConnection() {
-const randomPIN = Math.floor(1000 + Math.random() * 9000).toString();
-peer = new Peer(randomPIN);
-peer.on('open', (id) => {
-document.getElementById('lobby-room-id').innerText = id;
-document.getElementById('setup-section').style.display = "none";
-document.getElementById('lobby-section').style.display = "block";
-document.getElementById('start-game-btn').style.display = "block";
-players.push(myName);
-updateLobbyUI();
-});
-peer.on('connection', (conn) => {
-clientConnections.push(conn);
-conn.on('data', (data) => handleIncomingData(data));
-});
-peer.on('error', (err) => { if(err.type === 'unavailable-id') attemptHostConnection(); });
-}
-attemptHostConnection();
+    myName = document.getElementById('host-name').value || "Host";
+    isHost = true;
+    const display = document.getElementById('room-id-display');
+    const errorLog = document.getElementById('error-log');
+    display.innerText = "Finding empty room...";
+    errorLog.innerText = ""; 
+
+    debugLog("Host: Button clicked.");
+
+    function attemptHostConnection() {
+        const randomPIN = Math.floor(1000 + Math.random() * 9000).toString();
+        debugLog("Host: Attempting to claim PIN " + randomPIN + "...");
+
+        peer = new Peer(randomPIN, { 
+            debug: 3, 
+            config: { 
+                'iceServers': [ { urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' } ] 
+            } 
+        });
+
+        peer.on('open', (id) => {
+            debugLog("Host: SUCCESS! Claimed Room PIN: " + id);
+            display.innerText = "Ready!";
+            document.getElementById('lobby-room-id').innerText = id;
+            document.getElementById('create-btn').disabled = true;
+
+            document.getElementById('setup-section').style.display = "none";
+            document.getElementById('lobby-section').style.display = "block";
+            document.getElementById('start-game-btn').style.display = "inline-block";
+            players.push(myName);
+            updateLobbyUI();
+        });
+
+        peer.on('error', (err) => { 
+            if(err.type === 'unavailable-id') {
+                debugLog("Host: PIN " + randomPIN + " is taken! Retrying...");
+                peer.destroy();
+                attemptHostConnection();
+            } else {
+                debugLog("❌ HOST ERROR: " + err.type);
+                display.innerText = "Failed";
+            }
+        });
+
+        peer.on('connection', (conn) => {
+            clientConnections.push(conn);
+            conn.on('open', () => debugLog("Host: New client connected!"));
+            conn.on('data', (data) => handleIncomingData(data));
+        });
+    }
+    attemptHostConnection();
 }
 
 function joinRoom() {
-myName = document.getElementById('join-name').value || "Player";
-const hostId = document.getElementById('join-id').value.trim();
-peer = new Peer();
-peer.on('open', () => {
-hostConnection = peer.connect(hostId);
-hostConnection.on('open', () => {
-document.getElementById('setup-section').style.display = "none";
-document.getElementById('lobby-section').style.display = "block";
-hostConnection.send({ type: 'JOIN_LOBBY', name: myName });
-});
-hostConnection.on('data', (data) => handleIncomingData(data));
-});
+    myName = document.getElementById('join-name').value || "Player";
+    const hostId = document.getElementById('join-id').value.trim();
+
+    if(!hostId || hostId.length !== 4) return alert("Please enter a 4-digit Room PIN");
+    document.getElementById('error-log').innerText = "";
+    debugLog("Client: Attempting to join PIN: " + hostId);
+
+    peer = new Peer(null, { 
+        debug: 3, 
+        config: { 
+            'iceServers': [ { urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' } ] 
+        } 
+    });
+
+    peer.on('open', () => {
+        debugLog("Client: Connected to server. Pinging Room " + hostId + "...");
+        hostConnection = peer.connect(hostId);
+        hostConnection.on('open', () => {
+            debugLog("Client: Successfully connected to Host!");
+            document.getElementById('setup-section').style.display = "none";
+            document.getElementById('lobby-section').style.display = "block";
+            hostConnection.send({ type: 'JOIN_LOBBY', name: myName });
+        });
+        hostConnection.on('data', (data) => handleIncomingData(data));
+    });
+
+    peer.on('error', (err) => {
+        debugLog("❌ JOIN ERROR: " + err.type);
+        alert("Connection failed: " + err.type);
+    });
 }
 
-// --- MESSAGE HANDLING ---
+// --- CENTRAL MESSAGE HANDLING ---
 function handleIncomingData(data) {
-if (data.type === 'JOIN_LOBBY') {
-players.push(data.name);
-updateLobbyUI();
-broadcastToClients({ type: 'UPDATE_LOBBY', players: players });
-}
-if (data.type === 'UPDATE_LOBBY') { players = data.players; updateLobbyUI(); }
-if (data.type === 'START_GAME') {
-finishedPlayers = []; 
-document.getElementById('next-round-btn').style.display = 'none';
-
-players.forEach(p => {
-    cardCounts[p] = 13;
-    if(playerScores[p] === undefined) playerScores[p] = 0;
-}); 
-
-updateOpponentUI();
-updateScoreboardUI();
-updateLeaderboardUI(); 
-updateRoundHistoryUI(); // Update history UI
-
-document.getElementById('table-area').innerHTML = ''; 
-document.getElementById('lobby-section').style.display = "none";
-document.getElementById('game-section').style.display = "block";
-}
-if (data.type === 'DEAL') { currentHand = data.cards; renderHand(currentHand); }
-
-if (data.type === 'TURN_UPDATE') {
-currentTurnIndex = data.turnIndex;
-updateTurnUI();
-startTurnTimer(); 
-}
-
-if (data.type === 'CHAT') {
-    appendChatMessage(data.name, data.message);
-    if (isHost) broadcastToClients(data);
-}
-
-if (data.type === 'PLAY_CARDS') {
-renderTable(data.cards);
-playSound.currentTime = 0;
-playSound.play().catch(err => console.log("Audio blocked:", err));
-
-cardCounts[data.name] -= data.cards.length;
-updateOpponentUI();
-
-logGame(`${data.name} played.`);
-if (isHost) {
-    broadcastToClients({ type: 'PLAY_CARDS', name: data.name, cards: data.cards });
-    advanceTurn(); 
-}
-}
-
-if (data.type === 'PLAYER_FINISHED') {
-if (!finishedPlayers.includes(data.name)) {
-    finishedPlayers.push(data.name);
-    
-    const place = finishedPlayers.length;
-    const pointsEarned = place === 1 ? 3 : place === 2 ? 2 : place === 3 ? 1 : 0;
-    playerScores[data.name] += pointsEarned;
-    
-    // NEW: If they got 1st place, add them to the history log
-    if (place === 1) {
-        roundHistory.push(data.name);
-        updateRoundHistoryUI();
+    if (data.type === 'JOIN_LOBBY') {
+        players.push(data.name);
+        updateLobbyUI();
+        broadcastToClients({ type: 'UPDATE_LOBBY', players: players });
+    }
+    if (data.type === 'UPDATE_LOBBY') { 
+        players = data.players; 
+        updateLobbyUI(); 
     }
 
-    updateScoreboardUI();
-    updateLeaderboardUI();
+    if (data.type === 'START_GAME') {
+        gameLowestCard = data.lowestCard;
+        finishedPlayers = []; 
+        currentTableCards = [];
+        consecutivePasses = 0;
+        trickLeader = null;
+        document.getElementById('next-round-btn').style.display = 'none';
 
-    const placeString = place === 1 ? "1st" : place === 2 ? "2nd" : place === 3 ? "3rd" : "4th";
-    winSound.currentTime = 0;
-    winSound.play().catch(err => console.log("Audio blocked:", err));
-    triggerWinVisuals(data.name, place);
-    logGame(`>>> ${data.name} HAS FINISHED IN ${placeString.toUpperCase()} PLACE! (+${pointsEarned} pts) <<<`);
-}
+        players.forEach(p => {
+            cardCounts[p] = 13;
+            if(playerScores[p] === undefined) playerScores[p] = 0;
+        }); 
 
-if (finishedPlayers.length >= players.length - 1) {
-    clearInterval(turnTimerInterval);
-    document.getElementById('timer-display').style.display = 'none';
-    document.getElementById('turn-indicator').innerText = "Game Over!";
-    if (isHost) document.getElementById('next-round-btn').style.display = 'inline-block';
-}
+        document.getElementById('lobby-section').style.display = "none";
+        document.getElementById('game-section').style.display = "block";
 
-if (isHost) broadcastToClients({ type: 'PLAYER_FINISHED', name: data.name });
-}
+        updateOpponentUI();
+        updateScoreboardUI();
+        updateLeaderboardUI(); 
+        updateRoundHistoryUI(); 
 
-if (data.type === 'UNDO_PLAY') {
-document.getElementById('table-area').innerHTML = '';
-logGame(`${data.name} reverted their last move.`);
-cardCounts[data.name] += data.count;
-updateOpponentUI();
+        document.getElementById('table-area').innerHTML = ''; 
+    }
 
-if (isHost) {
-    broadcastToClients({ type: 'UNDO_PLAY', name: data.name, count: data.count });
-    revertTurn(data.name); 
-}
-}
+    if (data.type === 'DEAL') { 
+        currentHand = data.cards; 
+        renderHand(currentHand); 
+    }
 
-if (data.type === 'PASS') {
-passSound.currentTime = 0;
-passSound.play().catch(err => console.log("Audio blocked:", err));
+    if (data.type === 'TURN_UPDATE') {
+        currentTurnIndex = data.turnIndex;
+        updateTurnUI();
+        startTurnTimer(); 
+    }
 
-logGame(`${data.name} passed.`);
-if (isHost) {
-    broadcastToClients({ type: 'PASS', name: data.name });
-    advanceTurn(); 
-}
-}
+    if (data.type === 'CHAT') {
+        appendChatMessage(data.name, data.message);
+        if (isHost) broadcastToClients(data);
+    }
 
-// Sync Scoreboard & History
-if (data.type === 'SYNC_SCORES') {
-    playerScores = data.scores;
-    roundHistory = data.history || [];
-    updateScoreboardUI();
-    updateRoundHistoryUI();
-}
+    if (data.type === 'PLAY_CARDS') {
+        renderTable(data.cards);
+        playSound.currentTime = 0;
+        playSound.play().catch(err => console.log("Audio blocked:", err));
+
+        currentTableCards = data.cards;
+        consecutivePasses = 0;
+        trickLeader = data.name; 
+        
+        cardCounts[data.name] -= data.cards.length;
+        updateOpponentUI();
+
+        logGame(`${data.name} played.`);
+
+        // Finished logic
+        if (cardCounts[data.name] === 0 && !finishedPlayers.includes(data.name)) {
+            finishedPlayers.push(data.name);
+            
+            const place = finishedPlayers.length;
+            const pointsEarned = place === 1 ? 3 : place === 2 ? 2 : place === 3 ? 1 : 0;
+            playerScores[data.name] += pointsEarned;
+            
+            if (place === 1) {
+                roundHistory.push(data.name);
+                updateRoundHistoryUI();
+            }
+
+            updateScoreboardUI();
+            updateLeaderboardUI();
+
+            const placeString = place === 1 ? "1st" : place === 2 ? "2nd" : place === 3 ? "3rd" : "4th";
+            winSound.currentTime = 0;
+            winSound.play().catch(err => console.log("Audio blocked:", err));
+            triggerWinVisuals(data.name, place);
+            logGame(`>>> ${data.name} HAS FINISHED IN ${placeString.toUpperCase()} PLACE! (+${pointsEarned} pts) <<<`);
+
+            if (finishedPlayers.length >= players.length - 1) {
+                clearInterval(turnTimerInterval);
+                document.getElementById('timer-display').style.display = 'none';
+                document.getElementById('turn-indicator').innerText = "Game Over!";
+                if (isHost) document.getElementById('next-round-btn').style.display = 'inline-block';
+            }
+        }
+
+        if (isHost) {
+            broadcastToClients(data); 
+            if(finishedPlayers.length < players.length - 1) {
+                advanceTurn(); 
+            }
+        }
+    }
+
+    if (data.type === 'UNDO_PLAY') {
+        document.getElementById('table-area').innerHTML = '';
+        logGame(`${data.name} reverted their last move.`);
+        currentTableCards = []; 
+        consecutivePasses = 0;
+        trickLeader = null;
+        
+        cardCounts[data.name] += data.count;
+        updateOpponentUI();
+
+        if (isHost) {
+            broadcastToClients(data);
+            revertTurn(data.name); 
+        }
+    }
+
+    if (data.type === 'PASS') {
+        passSound.currentTime = 0;
+        passSound.play().catch(err => console.log("Audio blocked:", err));
+        logGame(`${data.name} passed.`);
+
+        consecutivePasses++;
+        
+        let activePlayers = players.filter(p => !finishedPlayers.includes(p));
+        let isLeaderActive = trickLeader && !finishedPlayers.includes(trickLeader);
+        let passesNeeded = isLeaderActive ? activePlayers.length - 1 : activePlayers.length;
+
+        if (consecutivePasses >= passesNeeded && activePlayers.length > 1) {
+            currentTableCards = [];
+            document.getElementById('table-area').innerHTML = '';
+            logGame("Everyone passed. The table is cleared!");
+            
+            consecutivePasses = 0;
+            trickLeader = null;
+        }
+
+        if (isHost) {
+            broadcastToClients(data);
+            advanceTurn(); 
+        }
+    }
+
+    if (data.type === 'SYNC_SCORES') {
+        playerScores = data.scores;
+        roundHistory = data.history || [];
+        updateScoreboardUI();
+        updateRoundHistoryUI();
+    }
 }
 
 // --- ACTIONS ---
 function playSelectedCards() {
-const selected = currentHand.filter((_, i) => document.querySelectorAll('#my-hand .card')[i].classList.contains('selected'));
-if (selected.length === 0) return alert("Select at least one card!");
-lastPlayedCards = [...selected];
-currentHand = currentHand.filter(card => !selected.includes(card));
-renderHand(currentHand);
-renderTable(selected);
+    const selected = currentHand.filter((_, i) => document.querySelectorAll('#my-hand .card')[i].classList.contains('selected'));
+    if (selected.length === 0) return alert("Select at least one card!");
 
-playSound.currentTime = 0; 
-playSound.play().catch(err => console.log("Audio blocked:", err));
+    const sortedSelected = sortCards([...selected]);
 
-cardCounts[myName] -= selected.length;
-updateOpponentUI();
-
-document.getElementById('revert-btn').disabled = false;
-const msg = { type: 'PLAY_CARDS', name: myName, cards: selected };
-if (isHost) {
-logGame(`You played.`);
-broadcastToClients(msg);
-advanceTurn(); 
-} else {
-hostConnection.send(msg);
-}
-
-// Check if player finished
-if (currentHand.length === 0) {
-if (!finishedPlayers.includes(myName)) {
-    finishedPlayers.push(myName);
-    
-    const place = finishedPlayers.length;
-    const pointsEarned = place === 1 ? 3 : place === 2 ? 2 : place === 3 ? 1 : 0;
-    playerScores[myName] += pointsEarned;
-    
-    // NEW: If you got 1st place, add your name to the history log locally
-    if (place === 1) {
-        roundHistory.push(myName);
-        updateRoundHistoryUI();
+    if (roundHistory.length === 0 && currentTableCards.length === 0 && cardCounts[myName] === 13) {
+        if (gameLowestCard) {
+            const hasLowest = sortedSelected.some(c => c.label === gameLowestCard.label && c.suit === gameLowestCard.suit);
+            if (!hasLowest) {
+                return alert(`Official Rule: You must include the lowest dealt card (${gameLowestCard.label}${gameLowestCard.suit}) in your very first play of the game!`);
+            }
+        } else {
+            const has3Spades = sortedSelected.some(c => c.label === '3' && c.suit === '♠');
+            if (!has3Spades) {
+                return alert("Official Rule: You must include your lowest card in the very first play of the game!");
+            }
+        }
     }
 
-    updateScoreboardUI();
-    updateLeaderboardUI();
-    
-    const placeString = place === 1 ? "1st" : place === 2 ? "2nd" : place === 3 ? "3rd" : "4th";
-    winSound.currentTime = 0;
-    winSound.play().catch(err => console.log("Audio blocked:", err));
-    triggerWinVisuals("You", place);
-    logGame(`You have finished the game in ${placeString} place! (+${pointsEarned} pts)`);
-    
-    const finishMsg = { type: 'PLAYER_FINISHED', name: myName };
+    if (!isValidPlay(sortedSelected, currentTableCards)) {
+        return alert("Invalid play! You must play a valid combination that beats the current table cards.");
+    }
+
+    lastPlayedCards = [...selected];
+    currentHand = currentHand.filter(card => !selected.includes(card));
+    renderHand(currentHand);
+
+    document.getElementById('revert-btn').disabled = false;
+    document.getElementById('play-btn').disabled = true;
+    document.getElementById('pass-btn').disabled = true;
+
+    const msg = { type: 'PLAY_CARDS', name: myName, cards: sortedSelected };
+
     if (isHost) {
-        broadcastToClients(finishMsg);
-        broadcastToClients({ type: 'SYNC_SCORES', scores: playerScores, history: roundHistory }); // Sync scores & history
+        handleIncomingData(msg); 
     } else {
-        hostConnection.send(finishMsg);
+        hostConnection.send(msg);
     }
-}
-
-document.getElementById('play-btn').disabled = true;
-document.getElementById('pass-btn').disabled = true;
-document.getElementById('revert-btn').disabled = true;
-}
 }
 
 function revertLastPlay() {
-if (lastPlayedCards.length === 0) return;
-const countToRevert = lastPlayedCards.length;
+    if (lastPlayedCards.length === 0) return;
+    const countToRevert = lastPlayedCards.length;
 
-currentHand.push(...lastPlayedCards);
-currentHand = sortCards(currentHand);
-renderHand(currentHand);
-document.getElementById('table-area').innerHTML = '';
-document.getElementById('revert-btn').disabled = true;
-lastPlayedCards = [];
+    currentHand.push(...lastPlayedCards);
+    currentHand = sortCards(currentHand);
+    renderHand(currentHand);
+    document.getElementById('revert-btn').disabled = true;
+    lastPlayedCards = [];
 
-cardCounts[myName] += countToRevert;
-updateOpponentUI();
-
-const msg = { type: 'UNDO_PLAY', name: myName, count: countToRevert };
-if (isHost) {
-logGame(`You reverted your last move.`);
-broadcastToClients(msg);
-revertTurn(myName); 
-} else {
-hostConnection.send(msg);
-}
+    const msg = { type: 'UNDO_PLAY', name: myName, count: countToRevert };
+    if (isHost) {
+        handleIncomingData(msg); 
+    } else {
+        hostConnection.send(msg);
+    }
 }
 
 function passTurn() {
-passSound.currentTime = 0;
-passSound.play().catch(err => console.log("Audio blocked:", err));
+    document.getElementById('play-btn').disabled = true;
+    document.getElementById('pass-btn').disabled = true;
 
-const msg = { type: 'PASS', name: myName };
-if (isHost) {
-logGame(`You passed.`);
-broadcastToClients(msg);
-advanceTurn(); 
-} else {
-hostConnection.send(msg);
-}
+    const msg = { type: 'PASS', name: myName };
+    if (isHost) {
+        handleIncomingData(msg); 
+    } else {
+        hostConnection.send(msg);
+    }
 }
 
 // --- CHAT LOGIC ---
@@ -544,7 +700,8 @@ function updateTurnUI() {
     if (currentPlayer === myName) {
         turnIndicator.innerText = "👉 It's your turn! 👈";
         document.getElementById('play-btn').disabled = false;
-        document.getElementById('pass-btn').disabled = false;
+        
+        document.getElementById('pass-btn').disabled = (currentTableCards.length === 0);
     } else {
         turnIndicator.innerText = `Waiting on ${currentPlayer}...`;
         document.getElementById('play-btn').disabled = true;
@@ -574,8 +731,15 @@ function startTurnTimer() {
         if (timeRemaining <= 0) {
             clearInterval(turnTimerInterval);
             if (players[currentTurnIndex] === myName && !finishedPlayers.includes(myName)) {
-                logGame("Time's up! You automatically passed.");
-                passTurn();
+                logGame("Time's up! Auto-passing...");
+                
+                if (currentTableCards.length === 0 && currentHand.length > 0) {
+                    const forcedCard = document.querySelectorAll('#my-hand .card');
+                    if(forcedCard) forcedCard.classList.add('selected');
+                    playSelectedCards();
+                } else {
+                    passTurn();
+                }
             }
         }
     }, 1000);
@@ -583,43 +747,91 @@ function startTurnTimer() {
 
 // --- UTILITIES ---
 function startGame() {
-finishedPlayers = []; 
-document.getElementById('next-round-btn').style.display = 'none';
+    finishedPlayers = []; 
+    currentTableCards = [];
+    consecutivePasses = 0;
+    trickLeader = null;
+    document.getElementById('next-round-btn').style.display = 'none';
 
-players.forEach(p => {
-    cardCounts[p] = 13;
-    if(playerScores[p] === undefined) playerScores[p] = 0;
-}); 
+    players.forEach(p => {
+        cardCounts[p] = 13;
+        if(playerScores[p] === undefined) playerScores[p] = 0;
+    }); 
 
-updateOpponentUI();
-updateScoreboardUI();
-updateLeaderboardUI(); 
-updateRoundHistoryUI(); 
+    updateOpponentUI();
+    updateScoreboardUI();
+    updateLeaderboardUI(); 
+    updateRoundHistoryUI(); 
 
-document.getElementById('table-area').innerHTML = '';
-document.getElementById('lobby-section').style.display = "none";
-document.getElementById('game-section').style.display = "block";
+    document.getElementById('table-area').innerHTML = '';
+    document.getElementById('lobby-section').style.display = "none";
+    document.getElementById('game-section').style.display = "block";
 
-const deck = generateDeck();
-shuffle(deck);
-currentHand = sortCards(deck.slice(0, 13));
-renderHand(currentHand);
-clientConnections.forEach((c, i) => {
-const hand = sortCards(deck.slice((i + 1) * 13, (i + 2) * 13));
-c.send({ type: 'START_GAME' });
-c.send({ type: 'DEAL', cards: hand }); 
-c.send({ type: 'SYNC_SCORES', scores: playerScores, history: roundHistory }); // Sync scores AND history
-});
+    const deck = generateDeck();
+    shuffle(deck);
 
-if (isHost) {
-    currentTurnIndex = 0;
-    const turnMsg = { type: 'TURN_UPDATE', turnIndex: currentTurnIndex };
-    broadcastToClients(turnMsg);
-    handleIncomingData(turnMsg);
+    let allHands = [];
+    for (let i = 0; i < players.length; i++) {
+        allHands.push(sortCards(deck.slice(i * 13, (i + 1) * 13)));
+    }
+
+    const firstIndex = 0;
+    currentHand = allHands[firstIndex];
+    renderHand(currentHand);
+
+    let startingPlayerIndex = 0;
+    gameLowestCard = null;
+
+    // --- BULLETPROOF DYNAMIC STARTING PLAYER RULE ---
+    if (roundHistory.length > 0) {
+        const lastWinner = roundHistory[roundHistory.length - 1];
+        startingPlayerIndex = players.indexOf(lastWinner);
+        if (startingPlayerIndex === -1) startingPlayerIndex = 0;
+        debugLog(`Next Round: Previous winner (${players[startingPlayerIndex]}) starts.`);
+    } else {
+        let absoluteLowestRank = 999;
+        let absoluteLowestSuit = 999;
+        
+        allHands.forEach((hand, pIndex) => {
+            if(hand.length > 0) {
+                // Explicitly scan every single card in this player's hand to verify the lowest
+                let minCard = hand;
+                hand.forEach(c => {
+                    let rDiff = rankOrder[c.label] - rankOrder[minCard.label];
+                    if (rDiff < 0 || (rDiff === 0 && suitOrder[c.suit] < suitOrder[minCard.suit])) {
+                        minCard = c;
+                    }
+                });
+                
+                let pRank = rankOrder[minCard.label];
+                let pSuit = suitOrder[minCard.suit];
+                
+                // Compare this player's lowest card to the absolute lowest dealt across the board
+                if (pRank < absoluteLowestRank || (pRank === absoluteLowestRank && pSuit < absoluteLowestSuit)) {
+                    absoluteLowestRank = pRank;
+                    absoluteLowestSuit = pSuit;
+                    startingPlayerIndex = pIndex;
+                    gameLowestCard = minCard; 
+                }
+            }
+        });
+        debugLog(`First Round: Lowest card dealt is ${gameLowestCard.label}${gameLowestCard.suit}. Player ${players[startingPlayerIndex]} starts.`);
+    }
+
+    clientConnections.forEach((c, i) => {
+        c.send({ type: 'START_GAME', lowestCard: gameLowestCard });
+        c.send({ type: 'DEAL', cards: allHands[i + 1] }); 
+        c.send({ type: 'SYNC_SCORES', scores: playerScores, history: roundHistory });
+    });
+
+    if (isHost) {
+        currentTurnIndex = startingPlayerIndex;
+        const turnMsg = { type: 'TURN_UPDATE', turnIndex: currentTurnIndex };
+        broadcastToClients(turnMsg);
+        handleIncomingData(turnMsg);
+    }
 }
-}
 
-// Render Opponent Card Tracker UI
 function updateOpponentUI() {
     const container = document.getElementById('opponent-area');
     container.innerHTML = '';
@@ -634,48 +846,48 @@ function updateOpponentUI() {
 }
 
 function renderHand(cards) {
-const container = document.getElementById('my-hand');
-container.innerHTML = '';
-cards.forEach(c => container.appendChild(createCardElement(c, true)));
+    const container = document.getElementById('my-hand');
+    container.innerHTML = '';
+    cards.forEach(c => container.appendChild(createCardElement(c, true)));
 }
 
 function logGame(msg) {
-const log = document.getElementById('game-log');
-log.innerHTML += `<br>${msg}`;
-log.scrollTop = log.scrollHeight;
+    const log = document.getElementById('game-log');
+    log.innerHTML += `<br>${msg}`;
+    log.scrollTop = log.scrollHeight;
 }
 
 // --- COLORFUL 4-DECK SUITS ---
 function generateDeck() {
-const suits = ['♠', '♣', '♦', '♥'];
-const labels = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
+    const suits = ['♠', '♣', '♦', '♥'];
+    const labels = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
 
-return labels.flatMap(l => suits.map(s => {
-    let cardColor = 'black'; 
-    if (s === '♥') cardColor = 'red';
-    if (s === '♦') cardColor = 'blue';
-    if (s === '♣') cardColor = 'green';
-    return {label: l, suit: s, color: cardColor};
-}));
+    return labels.flatMap(l => suits.map(s => {
+        let cardColor = 'black'; 
+        if (s === '♥') cardColor = 'red';
+        if (s === '♦') cardColor = 'blue';
+        if (s === '♣') cardColor = 'green';
+        return {label: l, suit: s, color: cardColor};
+    }));
 }
 
 function shuffle(array) {
-for (let i = array.length - 1; i > 0; i--) {
-const j = Math.floor(Math.random() * (i + 1));
-[array[i], array[j]] = [array[j], array[i]];
-}
+    for (let i = array.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [array[i], array[j]] = [array[j], array[i]];
+    }
 }
 
 function updateLobbyUI() {
-document.getElementById('player-count').innerText = players.length;
-const list = document.getElementById('player-list');
-list.innerHTML = "";
-players.forEach(name => {
-let li = document.createElement('li');
-li.innerText = name;
-li.style.margin = "5px";
-list.appendChild(li);
-});
+    document.getElementById('player-count').innerText = players.length;
+    const list = document.getElementById('player-list');
+    list.innerHTML = "";
+    players.forEach(name => {
+        let li = document.createElement('li');
+        li.innerText = name;
+        li.style.margin = "5px";
+        list.appendChild(li);
+    });
 }
 
 function updateLeaderboardUI() {
@@ -707,7 +919,6 @@ function updateScoreboardUI() {
     });
 }
 
-// NEW: Render the History of Round Winners
 function updateRoundHistoryUI() {
     const historyList = document.getElementById('history-list');
     historyList.innerHTML = '';
