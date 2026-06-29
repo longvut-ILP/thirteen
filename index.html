@@ -242,7 +242,7 @@ function getPlayType(cards) {
     const ranks = cards.map(c => rankOrder[c.label]);
     
     // Check for Pair, Triplet, Quartet
-    const allSame = ranks.every(r => r === ranks);
+    const allSame = ranks.every(r => r === ranks[0]);
     if (allSame) {
         if (cards.length === 2) return 'pair';
         if (cards.length === 3) return 'triplet';
@@ -735,7 +735,7 @@ function startTurnTimer() {
                 
                 if (currentTableCards.length === 0 && currentHand.length > 0) {
                     const forcedCard = document.querySelectorAll('#my-hand .card');
-                    if(forcedCard) forcedCard.classList.add('selected');
+                    if(forcedCard.length) forcedCard[0].classList.add('selected');
                     playSelectedCards();
                 } else {
                     passTurn();
@@ -795,7 +795,7 @@ function startGame() {
         allHands.forEach((hand, pIndex) => {
             if(hand.length > 0) {
                 // Explicitly scan every single card in this player's hand to verify the lowest
-                let minCard = hand;
+                let minCard = hand[0];
                 hand.forEach(c => {
                     let rDiff = rankOrder[c.label] - rankOrder[minCard.label];
                     if (rDiff < 0 || (rDiff === 0 && suitOrder[c.suit] < suitOrder[minCard.suit])) {
