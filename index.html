@@ -308,9 +308,29 @@ function isValidPlay(selectedCards, tableCards) {
     }
 
     const rankDiff = rankOrder[highestSelected.label] - rankOrder[highestTable.label];
-    if (rankDiff > 0) return true; 
-    if (rankDiff === 0 && suitOrder[highestSelected.suit] > suitOrder[highestTable.suit]) return true; 
-    
+    if (rankDiff > 0) return true;
+    if (rankDiff === 0 && suitOrder[highestSelected.suit] > suitOrder[highestTable.suit]) return true;
+
+    return false;
+}
+
+// Returns true if the hand contains ANY combination that legally beats the table.
+// When the table is empty (you are leading) you can always play, so it returns true.
+function hasValidMove(hand, tableCards) {
+    if (!tableCards || tableCards.length === 0) return true;
+    const n = hand.length;
+    if (n === 0) return false;
+    const tableLen = tableCards.length;
+    // Enumerate subsets of the hand and test each against the table.
+    // Only sizes that could win matter: same length as the table, or a bomb (>= 4 cards).
+    for (let mask = 1; mask < (1 << n); mask++) {
+        let size = 0;
+        for (let i = 0; i < n; i++) if (mask & (1 << i)) size++;
+        if (size !== tableLen && size < 4) continue;
+        const subset = [];
+        for (let i = 0; i < n; i++) if (mask & (1 << i)) subset.push(hand[i]);
+        if (isValidPlay(sortCards([...subset]), tableCards)) return true;
+    }
     return false;
 }
 
@@ -728,8 +748,22 @@ function updateTurnUI() {
     if (currentPlayer === myName) {
         turnIndicator.innerText = "👉 It's your turn! 👈";
         document.getElementById('play-btn').disabled = false;
-        
+
         document.getElementById('pass-btn').disabled = (currentTableCards.length === 0);
+
+        // Auto-pass: if there is a table to beat and no card/combo in hand can beat it, skip automatically.
+        if (currentTableCards.length > 0 && !finishedPlayers.includes(myName) && !hasValidMove(currentHand, currentTableCards)) {
+            turnIndicator.innerText = "No valid move — auto-passing...";
+            document.getElementById('play-btn').disabled = true;
+            document.getElementById('pass-btn').disabled = true;
+            logGame("You have no card that beats the table — auto-passing.");
+            setTimeout(() => {
+                if (players[currentTurnIndex] === myName && currentTableCards.length > 0 &&
+                    !finishedPlayers.includes(myName) && !hasValidMove(currentHand, currentTableCards)) {
+                    passTurn();
+                }
+            }, 800);
+        }
     } else {
         turnIndicator.innerText = `Waiting on ${currentPlayer}...`;
         document.getElementById('play-btn').disabled = true;
