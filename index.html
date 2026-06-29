@@ -81,6 +81,11 @@ button:disabled { background: #888; color: #ccc; cursor: not-allowed; }
 /* Diagnostic Box */
 #error-log { background: rgba(0,0,0,0.8); color: #0f0; padding: 10px; border-radius: 5px; margin-top: 15px; font-family: monospace; font-size: 0.8rem; text-align: left; height: 100px; overflow-y: auto; }
 
+/* Pause Overlay */
+#pause-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.75); z-index: 20000; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+#pause-overlay .pause-title { font-size: 2.5rem; font-weight: bold; color: #ffeb3b; text-shadow: 2px 2px 5px #000; }
+#pause-overlay .pause-sub { font-size: 1.2rem; margin-top: 10px; color: #fff; }
+
 /* --- MOBILE RESPONSIVE TWEAKS --- */
 @media (max-width: 600px) {
   body { padding: 5px; }
@@ -168,6 +173,7 @@ button:disabled { background: #888; color: #ccc; cursor: not-allowed; }
 <button id="play-btn" disabled>Play Selected Cards</button>
 <button id="pass-btn" class="btn-pass" disabled>Pass</button>
 <button id="revert-btn" class="btn-danger" disabled>Revert Last Play</button>
+<button id="pause-btn" style="background:#9c27b0; color:white;">⏸ Pause Game</button>
 
 <!-- Host Control to Deal Next Round -->
 <button id="next-round-btn" style="display:none; background:#4caf50; color:white; margin-top: 20px;">Deal Next Round</button>
@@ -182,6 +188,7 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('play-btn').addEventListener('click', playSelectedCards);
     document.getElementById('pass-btn').addEventListener('click', passTurn);
     document.getElementById('revert-btn').addEventListener('click', revertLastPlay);
+    document.getElementById('pause-btn').addEventListener('click', togglePause);
 
     // Chat Event Listeners
     document.getElementById('send-chat-btn').addEventListener('click', sendChatMessage);
@@ -213,6 +220,7 @@ let currentTableCards = [];
 let consecutivePasses = 0;
 let trickLeader = null;
 let passedPlayers = []; // players who passed in the current trick (skipped until it clears)
+let isPaused = false; // when true, the turn timer is frozen and actions are disabled
 
 // --- SOUND EFFECTS ---
 const playSound = new Audio('https://actions.google.com/sounds/v1/cartoon/pop.ogg');
@@ -614,6 +622,16 @@ function handleIncomingData(data) {
         updateScoreboardUI();
         updateRoundHistoryUI();
     }
+
+    if (data.type === 'PAUSE') {
+        applyPause(data.name);
+        if (isHost) broadcastToClients(data);
+    }
+
+    if (data.type === 'RESUME') {
+        applyResume(data.name);
+        if (isHost) broadcastToClients(data);
+    }
 }
 
 // --- ACTIONS ---
@@ -682,10 +700,61 @@ function passTurn() {
 
     const msg = { type: 'PASS', name: myName };
     if (isHost) {
-        handleIncomingData(msg); 
+        handleIncomingData(msg);
     } else {
         hostConnection.send(msg);
     }
+}
+
+// --- PAUSE / RESUME (any player can pause when someone is busy) ---
+function togglePause() {
+    const msg = { type: isPaused ? 'RESUME' : 'PAUSE', name: myName };
+    if (isHost) {
+        handleIncomingData(msg);
+    } else if (hostConnection) {
+        hostConnection.send(msg);
+    }
+}
+
+function applyPause(name) {
+    isPaused = true;
+    clearInterval(turnTimerInterval); // freeze the turn countdown for everyone
+    document.getElementById('play-btn').disabled = true;
+    document.getElementById('pass-btn').disabled = true;
+    document.getElementById('revert-btn').disabled = true;
+    const timerDisplay = document.getElementById('timer-display');
+    if (timerDisplay) timerDisplay.innerText = '⏸ Paused';
+    const btn = document.getElementById('pause-btn');
+    if (btn) btn.innerText = '▶ Resume Game';
+    showPauseOverlay(name);
+    logGame(`⏸ ${name} paused the game.`);
+}
+
+function applyResume(name) {
+    isPaused = false;
+    hidePauseOverlay();
+    const btn = document.getElementById('pause-btn');
+    if (btn) btn.innerText = '⏸ Pause Game';
+    logGame(`▶ ${name} resumed the game.`);
+    updateTurnUI();   // restore the correct enabled/disabled state for the current turn
+    startTurnTimer(); // restart the countdown for whoever's turn it is
+}
+
+function showPauseOverlay(name) {
+    let overlay = document.getElementById('pause-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'pause-overlay';
+        document.body.appendChild(overlay);
+    }
+    overlay.innerHTML = `<div class="pause-title">⏸ Game Paused</div>` +
+        `<div class="pause-sub">Paused by ${name}. Hit "Resume Game" when everyone's ready.</div>`;
+    overlay.style.display = 'flex';
+}
+
+function hidePauseOverlay() {
+    const overlay = document.getElementById('pause-overlay');
+    if (overlay) overlay.style.display = 'none';
 }
 
 // --- CHAT LOGIC ---
@@ -752,13 +821,13 @@ function updateTurnUI() {
         document.getElementById('pass-btn').disabled = (currentTableCards.length === 0);
 
         // Auto-pass: if there is a table to beat and no card/combo in hand can beat it, skip automatically.
-        if (currentTableCards.length > 0 && !finishedPlayers.includes(myName) && !hasValidMove(currentHand, currentTableCards)) {
+        if (!isPaused && currentTableCards.length > 0 && !finishedPlayers.includes(myName) && !hasValidMove(currentHand, currentTableCards)) {
             turnIndicator.innerText = "No valid move — auto-passing...";
             document.getElementById('play-btn').disabled = true;
             document.getElementById('pass-btn').disabled = true;
             logGame("You have no card that beats the table — auto-passing.");
             setTimeout(() => {
-                if (players[currentTurnIndex] === myName && currentTableCards.length > 0 &&
+                if (!isPaused && players[currentTurnIndex] === myName && currentTableCards.length > 0 &&
                     !finishedPlayers.includes(myName) && !hasValidMove(currentHand, currentTableCards)) {
                     passTurn();
                 }
@@ -779,8 +848,9 @@ function updateTurnUI() {
 
 function startTurnTimer() {
     clearInterval(turnTimerInterval);
+    if (isPaused) return; // don't run the countdown while the game is paused
     timeRemaining = TURN_LIMIT;
-    
+
     const timerDisplay = document.getElementById('timer-display');
     timerDisplay.style.display = 'block';
     timerDisplay.innerText = `⏳ ${timeRemaining}s`;
