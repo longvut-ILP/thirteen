@@ -11,6 +11,8 @@
 <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <!-- External Confetti Library for the visual celebration -->
 <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+<!-- SortableJS: lets players drag to rearrange their hand (works on desktop and touch) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.15.2/Sortable.min.js"></script>
 
 <style>
 body { background: #1b5e20; color: white; font-family: sans-serif; text-align: center; margin: 0; padding: 10px; }
@@ -170,6 +172,12 @@ button:disabled { background: #888; color: #ccc; cursor: not-allowed; }
     </div>
 </div>
 
+<!-- Hand organize tools: drag cards to rearrange, or quick-sort -->
+<div id="hand-tools" style="margin-top:15px;">
+  <span style="font-size:0.85rem; color:#ccc;">Tip: drag your cards to rearrange them.</span><br>
+  <button id="sort-rank-btn" style="width:auto; padding:6px 14px; margin:6px 4px 0;">↕ Sort by Rank</button>
+  <button id="sort-suit-btn" style="width:auto; padding:6px 14px; margin:6px 4px 0;">↕ Sort by Suit</button>
+</div>
 <div class="card-area" id="my-hand"></div>
 <button id="play-btn" disabled>Play Selected Cards</button>
 <button id="pass-btn" class="btn-pass" disabled>Pass</button>
@@ -190,6 +198,8 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('pass-btn').addEventListener('click', passTurn);
     document.getElementById('revert-btn').addEventListener('click', revertLastPlay);
     document.getElementById('pause-btn').addEventListener('click', togglePause);
+    document.getElementById('sort-rank-btn').addEventListener('click', sortHandByRank);
+    document.getElementById('sort-suit-btn').addEventListener('click', sortHandBySuit);
 
     // Chat Event Listeners
     document.getElementById('send-chat-btn').addEventListener('click', sendChatMessage);
@@ -946,10 +956,38 @@ function updateOpponentUI() {
     });
 }
 
+let handSortable = null;
 function renderHand(cards) {
     const container = document.getElementById('my-hand');
     container.innerHTML = '';
     cards.forEach(c => container.appendChild(createCardElement(c, true)));
+    enableHandDragging(container);
+}
+
+// Let the player drag cards to rearrange their hand. Keeps currentHand in sync with the on-screen order.
+function enableHandDragging(container) {
+    if (typeof Sortable === 'undefined') return; // library failed to load — skip gracefully
+    if (handSortable) { handSortable.destroy(); handSortable = null; }
+    handSortable = new Sortable(container, {
+        animation: 150,
+        delay: 60,                 // small delay so a quick tap still selects a card
+        delayOnTouchOnly: true,
+        onEnd: function(evt) {
+            if (evt.oldIndex === evt.newIndex || evt.oldIndex == null) return;
+            const moved = currentHand.splice(evt.oldIndex, 1)[0];
+            currentHand.splice(evt.newIndex, 0, moved);
+        }
+    });
+}
+
+// Quick-sort helpers
+function sortHandByRank() {
+    currentHand = sortCards(currentHand); // by rank, then suit
+    renderHand(currentHand);
+}
+function sortHandBySuit() {
+    currentHand.sort((a, b) => suitOrder[a.suit] - suitOrder[b.suit] || rankOrder[a.label] - rankOrder[b.label]);
+    renderHand(currentHand);
 }
 
 function logGame(msg) {
